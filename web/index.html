@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>netscope 体检台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">🩺 netscope <span>体检台</span></div>
+  <div class="toolbar">
+    <label>检测通道
+      <select id="via"><option value="direct">⏱ 直连（本机）</option></select>
+    </label>
+    <button id="btn-run" class="primary">▶ 开始检测</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>📍 地址清单</h2>
+    <div class="add-row">
+      <input id="new-url" type="text" placeholder="输入要体检的地址，如 https://github.com 或 example.com" spellcheck="false">
+      <button id="btn-add">＋ 添加</button>
+    </div>
+    <table id="targets" class="grid">
+      <thead><tr>
+        <th class="w-check"><input type="checkbox" id="check-all" checked></th>
+        <th>地址</th><th>添加时间</th><th class="w-op">操作</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="empty-tip" class="tip" hidden>清单为空，先添加几个地址吧</div>
+  </section>
+
+  <section class="card">
+    <h2>🧪 检测结果 <span id="progress" class="progress"></span></h2>
+    <table id="results" class="grid">
+      <thead><tr>
+        <th>地址</th><th>状态</th><th>状态码</th><th>总耗时</th><th>建连</th><th>出口IP</th><th>归属地</th><th>说明</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="result-tip" class="tip">勾选地址后点「开始检测」</div>
+  </section>
+
+  <section class="card">
+    <h2>📄 历史报告</h2>
+    <table id="reports" class="grid">
+      <thead><tr><th>文件</th><th>时间</th><th>大小</th><th class="w-op">操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="report-tip" class="tip" hidden>暂无报告，跑一次 <code>netscope sub rate</code> 试试</div>
+  </section>
+</main>
+
+<footer>netscope · 局域网体检台 · 数据保存在本机</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

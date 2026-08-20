@@ -31,13 +31,16 @@ func icmpChecksum(b []byte) uint16 {
 
 // icmpMessage 是解析后的 ICMP 报文。
 type icmpMessage struct {
-	Type     uint8
-	Code     uint8
-	SrcIP    net.IP // 收到报文的来源
+	Type         uint8
+	Code         uint8
+	SrcIP        net.IP // 收到报文的来源
 	InnerUDPPort uint16 // 若为错误报文，内层 UDP 源端口（用于 traceroute 匹配）
-	PayloadID uint16 // echo 的 id
-	Seq       uint16
+	PayloadID    uint16 // echo 的 id
+	Seq          uint16
 }
+
+// protoICMP 是 IP 协议号 1（Windows 的 syscall 包没有 IPPROTO_ICMP 常量）。
+const protoICMP = 1
 
 // icmpConn 优先 raw（可收 time-exceeded），失败降级 SOCK_DGRAM（macOS 免权限，需 connect 后收发）。
 type icmpConn struct {
@@ -51,7 +54,7 @@ func newICMPConn() (*icmpConn, error) {
 	if pc, err := net.ListenPacket("ip4:icmp", "0.0.0.0"); err == nil {
 		return &icmpConn{pc: pc, isRaw: true}, nil
 	}
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, protoICMP)
 	if err != nil {
 		return nil, fmt.Errorf("无 ICMP 权限（raw 与 dgram 均失败）: %w", err)
 	}
@@ -69,7 +72,7 @@ func dialICMP(dst net.IP) (*icmpConn, error) {
 	if pc, err := net.ListenPacket("ip4:icmp", "0.0.0.0"); err == nil {
 		return &icmpConn{pc: pc, isRaw: true}, nil
 	}
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, protoICMP)
 	if err != nil {
 		return nil, fmt.Errorf("无 ICMP 权限（raw 与 dgram 均失败）: %w", err)
 	}
@@ -275,12 +278,12 @@ func summarizePing(st *PingStats, rtts []float64) {
 // ---------- route trace（UDP + ICMP，无需 root 优先） ----------
 
 type hopLine struct {
-	TTL    int     `json:"ttl"`
-	IP     string  `json:"ip,omitempty"`
-	Loc    string  `json:"location,omitempty"` // 归属地
-	RTTms  float64 `json:"rttMs,omitempty"`
-	Star   bool    `json:"star,omitempty"`
-	Final  bool    `json:"final,omitempty"` // 到达目标
+	TTL   int     `json:"ttl"`
+	IP    string  `json:"ip,omitempty"`
+	Loc   string  `json:"location,omitempty"` // 归属地
+	RTTms float64 `json:"rttMs,omitempty"`
+	Star  bool    `json:"star,omitempty"`
+	Final bool    `json:"final,omitempty"` // 到达目标
 }
 
 // RouteTrace 递增 TTL 的 UDP 探测。Linux 用 IP_RECVERR（免 root）；
@@ -469,7 +472,7 @@ func routeTraceSweep(ctx context.Context, ip net.IP, maxTTL int, timeout time.Du
 			Timeout: timeout,
 			Control: func(network, address string, c syscall.RawConn) error {
 				return c.Control(func(fd uintptr) {
-					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TTL, wantTTL)
+					setTTL(fd, wantTTL)
 				})
 			},
 		}

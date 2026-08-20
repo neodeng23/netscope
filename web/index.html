@@ -14,20 +14,31 @@
       <select id="via"><option value="direct">⏱ 直连（本机）</option></select>
     </label>
     <button id="btn-run" class="primary">▶ 开始检测</button>
+    <button id="btn-run-all" title="每个勾选地址 × 全部节点逐一检测">🌐 全节点对比</button>
+    <button id="btn-refresh" title="刷新清单与报告">⟳ 刷新</button>
   </div>
 </header>
 
 <main>
   <section class="card">
-    <h2>📍 地址清单</h2>
+    <h2>📍 地址清单
+      <span class="spacer"></span>
+      <label class="mini">分组
+        <select id="group-filter"><option value="">全部</option></select>
+      </label>
+      <button id="btn-export" class="mini-btn" title="导出为 JSON 文件">⬇ 导出</button>
+      <label class="mini-btn" for="file-import" title="从 JSON 文件导入">⬆ 导入</label>
+      <input id="file-import" type="file" accept=".json,application/json" hidden>
+    </h2>
     <div class="add-row">
       <input id="new-url" type="text" placeholder="输入要体检的地址，如 https://github.com 或 example.com" spellcheck="false">
+      <input id="new-group" type="text" placeholder="分组（可空）" class="w-group" spellcheck="false">
       <button id="btn-add">＋ 添加</button>
     </div>
     <table id="targets" class="grid">
       <thead><tr>
         <th class="w-check"><input type="checkbox" id="check-all" checked></th>
-        <th>地址</th><th>添加时间</th><th class="w-op">操作</th>
+        <th>地址</th><th>分组</th><th>添加时间</th><th class="w-op">操作</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -38,11 +49,24 @@
     <h2>🧪 检测结果 <span id="progress" class="progress"></span></h2>
     <table id="results" class="grid">
       <thead><tr>
-        <th>地址</th><th>状态</th><th>状态码</th><th>总耗时</th><th>建连</th><th>出口IP</th><th>归属地</th><th>说明</th>
+        <th>地址</th><th id="th-node" hidden>节点</th><th>状态</th><th>状态码</th><th>总耗时</th><th>建连</th><th>出口IP</th><th>归属地</th><th>说明</th>
       </tr></thead>
       <tbody></tbody>
     </table>
-    <div id="result-tip" class="tip">勾选地址后点「开始检测」</div>
+    <div id="result-tip" class="tip">勾选地址后点「开始检测」或「全节点对比」</div>
+  </section>
+
+  <section class="card">
+    <h2>📈 评分趋势
+      <span class="spacer"></span>
+      <label class="mini">节点
+        <select id="trend-node"><option value="">选择节点</option></select>
+      </label>
+      <button id="btn-trend" class="mini-btn">画图</button>
+    </h2>
+    <div id="trend-box" class="trend-box">
+      <div class="tip">对同一订阅多次跑 <code>netscope sub rate</code> 后，这里可以看单个节点评分随时间的变化（每次手动触发）</div>
+    </div>
   </section>
 
   <section class="card">
@@ -55,7 +79,7 @@
   </section>
 </main>
 
-<footer>netscope · 局域网体检台 · 数据保存在本机</footer>
+<footer>netscope · 局域网体检台 · 所有检测由页面按钮手动触发 · 数据保存在本机</footer>
 <script src="/static/app.js"></script>
 </body>
 </html>

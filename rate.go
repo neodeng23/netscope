@@ -14,29 +14,29 @@ import (
 
 // NodeScore 是单节点的综合评分明细。
 type NodeScore struct {
-	Node      string       `json:"node"`
-	Type      string       `json:"type"`
-	Server    string       `json:"server,omitempty"`
-	Check     CheckResult  `json:"check"`
-	Ping      *PingStats   `json:"ping,omitempty"`
-	Speed     *SpeedResult `json:"speed,omitempty"`
-	IP        *IPInfo      `json:"ip,omitempty"`
-	Alive     bool         `json:"alive"`
-	ScoreAvail  float64    `json:"scoreAvail"`  // 满分 20
-	ScoreLat    float64    `json:"scoreLat"`    // 满分 30
-	ScoreSpeed  float64    `json:"scoreSpeed"`  // 满分 30
-	ScoreIPQ    float64    `json:"scoreIpq"`    // 满分 20
-	Total       float64    `json:"total"`       // 0-100
+	Node       string       `json:"node"`
+	Type       string       `json:"type"`
+	Server     string       `json:"server,omitempty"`
+	Check      CheckResult  `json:"check"`
+	Ping       *PingStats   `json:"ping,omitempty"`
+	Speed      *SpeedResult `json:"speed,omitempty"`
+	IP         *IPInfo      `json:"ip,omitempty"`
+	Alive      bool         `json:"alive"`
+	ScoreAvail float64      `json:"scoreAvail"` // 满分 20
+	ScoreLat   float64      `json:"scoreLat"`   // 满分 30
+	ScoreSpeed float64      `json:"scoreSpeed"` // 满分 30
+	ScoreIPQ   float64      `json:"scoreIpq"`   // 满分 20
+	Total      float64      `json:"total"`      // 0-100
 }
 
 // RateOptions 控制 sub rate 的行为。
 type RateOptions struct {
-	Targets      []string
-	PingCount    int
-	SpeedSize    int64
-	SpeedDur     time.Duration
-	Timeout      time.Duration
-	Concurrency  int
+	Targets     []string
+	PingCount   int
+	SpeedSize   int64
+	SpeedDur    time.Duration
+	Timeout     time.Duration
+	Concurrency int
 }
 
 // RateNodes 对全部节点跑 check+ping+speed+ip 并评分。
@@ -123,17 +123,12 @@ func rateOne(ctx context.Context, n Tunnel, opt RateOptions) NodeScore {
 		}
 		ns.ScoreSpeed = 30 * x
 	}
-	// 4) IP 质量（P0：代理/机房标记扣分，无信息给一半）
+	// 4) IP 质量：风险分折算（风险 0 满分 20，风险 100 为 0 分；未知给一半）
 	ns.ScoreIPQ = 10
 	if ns.IP != nil {
-		q := 20.0
-		if ns.IP.Proxy {
-			q -= 8
+		if risk := ns.IP.RiskScore(); risk >= 0 {
+			ns.ScoreIPQ = 20 - float64(risk)/5
 		}
-		if ns.IP.Hosting {
-			q -= 4
-		}
-		ns.ScoreIPQ = q
 	}
 	ns.Total = ns.ScoreAvail + ns.ScoreLat + ns.ScoreSpeed + ns.ScoreIPQ
 	return ns
@@ -291,7 +286,6 @@ func SaveReport(dir string, nodes []NodeScore, topN int) (htmlPath, jsonPath str
 	}
 	return htmlPath, jsonPath, nil
 }
-
 
 // ---------- sub rate 命令 ----------
 

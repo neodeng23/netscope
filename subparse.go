@@ -77,7 +77,7 @@ func fetchSubscription(ctx context.Context, src string) ([]map[string]any, error
 	var data []byte
 	var err error
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		data, err = httpGetRetry(ctx, src, 2)
+		data, _, err = httpGetRetry(ctx, src, 2)
 	} else {
 		path := strings.TrimPrefix(src, "file://")
 		data, err = os.ReadFile(path)
@@ -88,12 +88,13 @@ func fetchSubscription(ctx context.Context, src string) ([]map[string]any, error
 	return parseSubscriptionContent(data)
 }
 
-func httpGetRetry(ctx context.Context, u string, retries int) ([]byte, error) {
+// httpGetRetry 带重试拉取，返回响应体与响应头（供 subscription-userinfo 等使用）。
+func httpGetRetry(ctx context.Context, u string, retries int) ([]byte, http.Header, error) {
 	var lastErr error
 	for i := 0; i <= retries; i++ {
 		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		req.Header.Set("User-Agent", subUA)
 		client := &http.Client{Timeout: 30 * time.Second}
@@ -102,20 +103,21 @@ func httpGetRetry(ctx context.Context, u string, retries int) ([]byte, error) {
 			lastErr = err
 		} else {
 			b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+			hdr := resp.Header
 			resp.Body.Close()
 			if err != nil {
 				lastErr = err
 			} else if resp.StatusCode != 200 {
 				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			} else {
-				return b, nil
+				return b, hdr, nil
 			}
 		}
 		if i < retries {
 			time.Sleep(time.Duration(i+1) * time.Second)
 		}
 	}
-	return nil, lastErr
+	return nil, nil, lastErr
 }
 
 // parseSubscriptionContent 自动识别：Clash YAML / v2ray Base64 / v2ray 明文 URI 列表。
@@ -311,9 +313,9 @@ func parseSSR(u *url.URL) (map[string]any, error) {
 	m := map[string]any{
 		"name": remark, "type": "ssr", "server": parts[0], "port": port,
 		"cipher": parts[3], "password": password,
-		"protocol":  parts[2],
-		"obfs":      parts[4],
-		"udp":       true,
+		"protocol": parts[2],
+		"obfs":     parts[4],
+		"udp":      true,
 	}
 	if v := gd("protoparam"); v != "" {
 		m["protocol-param"] = v
@@ -335,20 +337,20 @@ func parseVmess(u *url.URL) (map[string]any, error) {
 		return nil, err
 	}
 	var v struct {
-		Ps   string      `json:"ps"`
-		Add  string      `json:"add"`
-		Port any         `json:"port"`
-		ID   string      `json:"id"`
-		Aid  any         `json:"aid"`
-		Scy  string      `json:"scy"`
-		Net  string      `json:"net"`
-		Type string      `json:"type"`
-		Host string      `json:"host"`
-		Path string      `json:"path"`
-		TLS  string      `json:"tls"`
-		Sni  string      `json:"sni"`
-		Alpn any         `json:"alpn"`
-		Fp   string      `json:"fp"`
+		Ps   string `json:"ps"`
+		Add  string `json:"add"`
+		Port any    `json:"port"`
+		ID   string `json:"id"`
+		Aid  any    `json:"aid"`
+		Scy  string `json:"scy"`
+		Net  string `json:"net"`
+		Type string `json:"type"`
+		Host string `json:"host"`
+		Path string `json:"path"`
+		TLS  string `json:"tls"`
+		Sni  string `json:"sni"`
+		Alpn any    `json:"alpn"`
+		Fp   string `json:"fp"`
 	}
 	if err := json.Unmarshal([]byte(dec), &v); err != nil {
 		return nil, err

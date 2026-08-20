@@ -13,13 +13,15 @@ import (
 	"time"
 )
 
-// IPInfo 是一个 IP 的归属地与标记信息（ip-api）。
+// IPInfo 是一个 IP 的归属地与标记信息（ip-api 结构，其他数据源映射到同一形状）。
 type IPInfo struct {
 	Query      string `json:"query"`
 	Country    string `json:"country"`
 	RegionName string `json:"regionName"`
 	City       string `json:"city"`
 	ISP        string `json:"isp"`
+	AS         string `json:"as,omitempty"`
+	Mobile     bool   `json:"mobile"`
 	Proxy      bool   `json:"proxy"`
 	Hosting    bool   `json:"hosting"`
 	Status     string `json:"status"`
@@ -49,7 +51,33 @@ func (i *IPInfo) Flags() string {
 	if i.Hosting {
 		f = append(f, "机房")
 	}
+	if i.Mobile {
+		f = append(f, "移动")
+	}
 	return strings.Join(f, "/")
+}
+
+// RiskScore 返回 0-100 的 IP 风险分：代理(45) + 机房(35) + 移动网络(10)。
+// 无标记（家宽/普通宽带）为 0；查询失败返回 -1（未知）。
+// 模型为初版经验值，风险越高越容易被流媒体/AI 服务风控。
+func (i *IPInfo) RiskScore() int {
+	if i == nil || i.Status != "success" {
+		return -1
+	}
+	risk := 0
+	if i.Proxy {
+		risk += 45
+	}
+	if i.Hosting {
+		risk += 35
+	}
+	if i.Mobile {
+		risk += 10
+	}
+	if risk > 100 {
+		risk = 100
+	}
+	return risk
 }
 
 func (i *IPInfo) Short() string {
@@ -78,22 +106,28 @@ func tunnelHTTPClient(t Tunnel, timeout time.Duration) *http.Client {
 	return &http.Client{Transport: tr, Timeout: timeout}
 }
 
-// lookupCache 按 tunnel+ip 缓存查询结果。
-var lookupCache sync.Map
+// ---------- 可插拔的 IP 质量数据源 ----------
 
-// LookupIP 查询 IP 归属地（经隧道）。ip 为空时查询本机（该隧道的出口）IP。
-func LookupIP(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
-	key := t.Name() + "|" + ip
-	if v, ok := lookupCache.Load(key); ok {
-		if info, ok := v.(*IPInfo); ok {
-			return info, nil
-		}
-	}
+// IPQualitySource 是 IP 质量数据源接口：实现它并注册到 ipQualitySources 即可接入。
+// 返回的 *IPInfo 是统一形状（各源的字段映射进来）。
+type IPQualitySource interface {
+	Name() string
+	Lookup(ctx context.Context, t Tunnel, ip string) (*IPInfo, error)
+}
+
+// ipQualitySources 按序尝试，第一个成功即用。
+var ipQualitySources = []IPQualitySource{ipAPISource{}}
+
+type ipAPISource struct{}
+
+func (ipAPISource) Name() string { return "ip-api" }
+
+func (ipAPISource) Lookup(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
 	u := "http://ip-api.com/json/"
 	if ip != "" {
 		u += ip
 	}
-	u += "?lang=zh-CN&fields=status,message,country,regionName,city,isp,proxy,hosting,query"
+	u += "?lang=zh-CN&fields=status,message,country,regionName,city,isp,as,mobile,proxy,hosting,query"
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err
@@ -114,8 +148,31 @@ func LookupIP(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
 	if info.Status != "success" {
 		return nil, fmt.Errorf("ip-api: %s", info.Status)
 	}
-	lookupCache.Store(key, &info)
 	return &info, nil
+}
+
+// lookupCache 按 tunnel+ip 缓存查询结果。
+var lookupCache sync.Map
+
+// LookupIP 经注册的数据源查询 IP 归属地与质量（带缓存）。
+// ip 为空时查询本机（该隧道的出口）IP。
+func LookupIP(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
+	key := t.Name() + "|" + ip
+	if v, ok := lookupCache.Load(key); ok {
+		if info, ok := v.(*IPInfo); ok {
+			return info, nil
+		}
+	}
+	var lastErr error
+	for _, src := range ipQualitySources {
+		info, err := src.Lookup(ctx, t, ip)
+		if err == nil {
+			lookupCache.Store(key, info)
+			return info, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // ipipResult 是国内视角（myip.ipip.net 文本接口）。

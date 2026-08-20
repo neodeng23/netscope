@@ -23,6 +23,7 @@ type Target struct {
 	ID      string    `json:"id"`
 	URL     string    `json:"url"`
 	Note    string    `json:"note,omitempty"`
+	Group   string    `json:"group,omitempty"`
 	Created time.Time `json:"created"`
 }
 
@@ -62,7 +63,23 @@ func (t *targetStore) All() []Target {
 	return out
 }
 
-func (t *targetStore) Add(urlStr, note string) (Target, error) {
+// Groups 返回清单中出现过的分组（去重，按名称排序）。
+func (t *targetStore) Groups() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range t.list {
+		if x.Group != "" && !seen[x.Group] {
+			seen[x.Group] = true
+			out = append(out, x.Group)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (t *targetStore) Add(urlStr, note, group string) (Target, error) {
 	if !strings.Contains(urlStr, "://") {
 		urlStr = "https://" + urlStr
 	}
@@ -76,9 +93,48 @@ func (t *targetStore) Add(urlStr, note string) (Target, error) {
 			return x, nil
 		}
 	}
-	tg := Target{ID: randID(), URL: urlStr, Note: note, Created: time.Now()}
+	tg := Target{ID: randID(), URL: urlStr, Note: note, Group: group, Created: time.Now()}
 	t.list = append(t.list, tg)
 	return tg, t.saveLocked()
+}
+
+// Update 修改目标的备注与分组。
+func (t *targetStore) Update(id, note, group string) (Target, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for i, x := range t.list {
+		if x.ID == id {
+			t.list[i].Note = note
+			t.list[i].Group = group
+			_ = t.saveLocked()
+			return t.list[i], true
+		}
+	}
+	return Target{}, false
+}
+
+// Import 批量导入（按 URL 去重），返回新增数量。
+func (t *targetStore) Import(items []Target) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	seen := map[string]bool{}
+	for _, x := range t.list {
+		seen[x.URL] = true
+	}
+	added := 0
+	for _, it := range items {
+		if it.URL == "" || seen[it.URL] {
+			continue
+		}
+		seen[it.URL] = true
+		tg := Target{ID: randID(), URL: it.URL, Note: it.Note, Group: it.Group, Created: time.Now()}
+		t.list = append(t.list, tg)
+		added++
+	}
+	if added > 0 {
+		_ = t.saveLocked()
+	}
+	return added
 }
 
 func (t *targetStore) Remove(id string) bool {
@@ -114,10 +170,11 @@ func randID() string {
 	return hex.EncodeToString(b)
 }
 
-// ---------- 检测任务 ----------
+// ---------- 检测任务（全部由网页按钮手动触发，一次性完成） ----------
 
 type jobItem struct {
 	URL    string       `json:"url"`
+	Node   string       `json:"node,omitempty"` // 全节点对比时记录所用节点
 	Result *CheckResult `json:"result,omitempty"`
 }
 
@@ -138,36 +195,63 @@ type jobManager struct {
 
 func newJobManager() *jobManager { return &jobManager{jobs: map[string]*checkJob{}} }
 
-// Start 为 targets 通过 tunnel 发起异步检测（conc 路并发）。
-func (jm *jobManager) Start(ctx context.Context, targets []Target, t Tunnel, timeout time.Duration, conc int) string {
+// jobTask 是一个「目标 × 通道」组合。
+type jobTask struct {
+	URL    string
+	Tunnel Tunnel
+}
+
+// Start 为 tasks 发起异步检测（conc 路并发），返回任务 ID。
+func (jm *jobManager) Start(ctx context.Context, label string, tasks []jobTask, timeout time.Duration, conc int) string {
 	id := randID()
-	j := &checkJob{ID: id, Via: t.Name(), Started: time.Now()}
-	for _, tg := range targets {
-		j.Items = append(j.Items, jobItem{URL: tg.URL})
+	j := &checkJob{ID: id, Via: label, Started: time.Now()}
+	// 只有任务涉及多个通道（全节点对比）才逐条记录节点；
+	// 单通道任务每行节点相同，Via 标签已说明，避免结果表多一列冗余。
+	distinct := map[string]bool{}
+	for _, t := range tasks {
+		distinct[t.Tunnel.Name()] = true
+	}
+	withNode := len(distinct) > 1
+	for _, t := range tasks {
+		item := jobItem{URL: t.URL}
+		if withNode {
+			item.Node = t.Tunnel.Name()
+		}
+		j.Items = append(j.Items, item)
 	}
 	j.Total = len(j.Items)
 	jm.mu.Lock()
 	jm.jobs[id] = j
 	jm.mu.Unlock()
 	go func() {
-		var tasks []func(context.Context)
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, max(conc, 1))
 		for i := range j.Items {
 			i := i
-			tasks = append(tasks, func(ctx context.Context) {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				defer func() {
+					if r := recover(); r != nil {
+						Progress("[warn] serve 检测任务 panic 已恢复: %v\n", r)
+					}
+				}()
 				if ctx.Err() != nil {
 					return
 				}
 				cctx, cancel := context.WithTimeout(ctx, timeout)
-				r := HTTPCheck(cctx, t, j.Items[i].URL, timeout)
-				FillExitIP(cctx, t, &r)
+				r := HTTPCheck(cctx, tasks[i].Tunnel, j.Items[i].URL, timeout)
+				FillExitIP(cctx, tasks[i].Tunnel, &r)
 				cancel()
 				jm.mu.Lock()
 				j.Items[i].Result = &r
 				j.Done++
 				jm.mu.Unlock()
-			})
+			}()
 		}
-		RunParallel(ctx, conc, tasks)
+		wg.Wait()
 		jm.mu.Lock()
 		j.Finished = true
 		jm.mu.Unlock()
@@ -256,28 +340,51 @@ func buildMux(d serveDeps) *http.ServeMux {
 		reports, _ := listReports(d.reportDir)
 		writeJSON(w, map[string]any{
 			"targets": d.targets.All(),
+			"groups":  d.targets.Groups(),
 			"nodes":   nodeList,
 			"reports": reports,
 		})
 	})))
 
 	targetsHandler := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case "POST":
-			var req struct{ URL, Note string }
+		suffix := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/targets"), "/")
+		switch {
+		case r.Method == "POST" && suffix == "":
+			var req struct{ URL, Note, Group string }
 			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.URL == "" {
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
-			tg, err := d.targets.Add(req.URL, req.Note)
+			tg, err := d.targets.Add(req.URL, req.Note, req.Group)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			writeJSON(w, tg)
-		case "DELETE":
-			id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/targets"), "/")
-			if id == "" || !d.targets.Remove(id) {
+		case r.Method == "POST" && suffix == "update":
+			var req struct{ ID, Note, Group string }
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.ID == "" {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			if tg, ok := d.targets.Update(req.ID, req.Note, req.Group); ok {
+				writeJSON(w, tg)
+			} else {
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		case r.Method == "POST" && suffix == "import":
+			var items []Target
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&items); err != nil {
+				http.Error(w, "导入内容需为 JSON 数组", http.StatusBadRequest)
+				return
+			}
+			added := d.targets.Import(items)
+			writeJSON(w, map[string]any{"added": added})
+		case r.Method == "GET" && suffix == "export":
+			w.Header().Set("Content-Disposition", "attachment; filename=netscope-targets.json")
+			writeJSON(w, d.targets.All())
+		case r.Method == "DELETE" && suffix != "":
+			if !d.targets.Remove(suffix) {
 				http.Error(w, "not found", http.StatusNotFound)
 				return
 			}
@@ -307,16 +414,43 @@ func buildMux(d serveDeps) *http.ServeMux {
 			http.Error(w, "未选择地址", http.StatusBadRequest)
 			return
 		}
-		var t Tunnel = Direct
-		if req.Via != "" && req.Via != "direct" {
-			built, err := BuildTunnel(d.nodes(), req.Via)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+		var tasks []jobTask
+		label := req.Via
+		if req.Via == "all" {
+			// 全节点对比：每个地址 × 每个节点
+			nodes := d.nodes()
+			if len(nodes) == 0 {
+				http.Error(w, "未加载订阅节点（serve 需要 --sub）", http.StatusBadRequest)
 				return
 			}
-			t = built
+			if len(nodes)*len(tg) > 600 {
+				http.Error(w, fmt.Sprintf("组合过多（%d 地址 × %d 节点），请减少选择", len(tg), len(nodes)), http.StatusBadRequest)
+				return
+			}
+			for _, t := range tg {
+				for _, n := range nodes {
+					tasks = append(tasks, jobTask{URL: t.URL, Tunnel: n})
+				}
+			}
+			label = fmt.Sprintf("全部节点（%d 节点）", len(nodes))
+		} else {
+			var t Tunnel = Direct
+			if req.Via != "" && req.Via != "direct" {
+				built, err := BuildTunnel(d.nodes(), req.Via)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				t = built
+			}
+			for _, x := range tg {
+				tasks = append(tasks, jobTask{URL: x.URL, Tunnel: t})
+			}
+			if label == "" {
+				label = "direct"
+			}
 		}
-		id := d.jobs.Start(context.Background(), tg, t, d.timeout, d.conc)
+		id := d.jobs.Start(context.Background(), label, tasks, d.timeout, d.conc)
 		writeJSON(w, map[string]string{"id": id})
 	})))
 
@@ -328,6 +462,11 @@ func buildMux(d serveDeps) *http.ServeMux {
 			return
 		}
 		writeJSON(w, j)
+	})))
+
+	// /api/trend：汇总报告目录里的 rate-*.json 快照，供前端画趋势图
+	mux.Handle("/api/trend", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, buildTrend(d.reportDir))
 	})))
 
 	mux.Handle("/reports/", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -471,6 +610,54 @@ func listReports(dir string) ([]map[string]any, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i]["mtime"].(string) > out[j]["mtime"].(string) })
 	return out, nil
+}
+
+// trendNode 是一个节点在单次快照中的关键指标。
+type trendNode struct {
+	Node     string  `json:"node"`
+	Total    float64 `json:"total"`
+	Alive    bool    `json:"alive"`
+	AvgMs    float64 `json:"avgMs,omitempty"`
+	DownMbps float64 `json:"downMbps,omitempty"`
+}
+
+// trendSnapshot 是一次快照的全部节点指标。
+type trendSnapshot struct {
+	Time  string      `json:"time"` // 文件名（含时间戳）
+	Label string      `json:"label"`
+	Nodes []trendNode `json:"nodes"`
+}
+
+// buildTrend 按时间顺序汇总报告目录里的 rate-*.json。
+func buildTrend(dir string) []trendSnapshot {
+	paths, err := listSnapshots(dir)
+	if err != nil {
+		return nil
+	}
+	var out []trendSnapshot
+	// listSnapshots 返回新->旧，趋势图需要旧->新
+	for i := len(paths) - 1; i >= 0; i-- {
+		s, err := loadSnapshot(paths[i])
+		if err != nil {
+			continue
+		}
+		ts := trendSnapshot{Time: filepath.Base(paths[i]), Label: s.Time}
+		if ts.Label == "" {
+			ts.Label = ts.Time
+		}
+		for _, n := range s.Nodes {
+			tn := trendNode{Node: n.Node, Total: n.Total, Alive: n.Alive}
+			if n.Ping != nil && n.Ping.Recv > 0 {
+				tn.AvgMs = n.Ping.AvgMs
+			}
+			if n.Speed != nil && n.Speed.Err == "" {
+				tn.DownMbps = n.Speed.DownMbps
+			}
+			ts.Nodes = append(ts.Nodes, tn)
+		}
+		out = append(out, ts)
+	}
+	return out
 }
 
 func defaultTargetsPath() string {

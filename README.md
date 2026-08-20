@@ -4,11 +4,15 @@
 
 - 拉取 Clash / v2ray 订阅，解析全部节点，**逐节点**检测可用性、延迟、丢包、速度
 - 不经代理的本机网络诊断：ping、traceroute、端口探测、TLS 证书体检、DNS 审计、国内外出口 IP 与归属地
-- 综合打分与推荐：按延迟 / 速度 / 可用性 / IP 质量加权，给出"最优节点 Top N"
+- **流媒体 / AI 解锁检测**：Netflix / Disney+ / YouTube Premium / ChatGPT / Claude / Gemini / Telegram 逐项标注（P1）
+- 综合打分与推荐：按延迟 / 速度 / 可用性 / IP 质量加权，给出"最优节点 Top N"；**快照对比**看节点增删与分数变化（P1）
 - 输出：终端表格、JSON、CSV、**自包含 HTML 报告**（可分享）
-- Web 体检台（`serve`）：局域网内浏览器直接访问；**自定义地址清单**——网页上添加地址，一键测可达性、延迟、访问途径（直连/经节点、落地国家）
+- Web 体检台（`serve`）：局域网内浏览器直接访问；地址清单（分组 / 导入导出）、单通道检测、**全节点对比**、评分趋势图（P1）
 
-> 状态：**P0 已实现**。`go build -o netscope .` 出单二进制即用；P1/P2 见分期计划。
+> 状态：**P0、P1 已实现**。`go build -o netscope .` 出单二进制即用。
+>
+> **触发原则（已确认）**：所有检测都是一次性、由用户手动触发的（CLI 敲命令或网页点按钮）。
+> 不做长期驻留、定时巡检、自动循环与告警推送。
 
 ## 快速上手
 
@@ -16,8 +20,14 @@
 go build -o netscope .
 
 netscope sub check -sub "订阅链接或本地yaml"            # 节点批量可用性
-netscope sub rate -sub "订阅链接" --dur 5              # 综合评分 + HTML 报告（落 ~/.netscope/reports/）
-netscope ip show                                       # 国内外出口 IP 双视角
+netscope sub ping  -sub "订阅链接" --udp                # 延迟丢包 + STUN UDP 能力探测
+netscope sub rate  -sub "订阅链接" --dur 5              # 综合评分 + HTML 报告（落 ~/.netscope/reports/）
+netscope sub unlock -sub "订阅链接"                     # 流媒体/AI 解锁检测
+netscope sub info  -sub "订阅链接"                      # 订阅流量剩余 / 到期时间
+netscope report diff                                   # 最近两次评分快照对比
+netscope ip show                                       # 国内外出口 IP 双视角 + IP 风险分
+netscope dns audit github.com                          # 解析对比 + 污染检测 + EDNS 出口
+netscope route bloat                                   # bufferbloat：满载下载时的延迟变化
 netscope serve --sub "订阅链接"                         # Web 体检台，默认 0.0.0.0:8420，局域网可访问
 ```
 
@@ -50,13 +60,14 @@ netscope 由 `subcheck`（`~/code/subcheck`，已可用并经实网验证）重�
 2. **检测器可插拔**：所有检测面向统一的隧道接口（direct 或任一节点），新增检测项不改核心调度
 3. **人读与机器读并重**：终端表格 / HTML 给人看，JSON / CSV 给脚本用，每个子命令都支持 `--json`
 4. **中文优先**：CLI 输出与报告以中文为主
-5. **克制**：明确不做的事见下
+5. **全部手动触发**：任何检测都一次点击 / 一条命令跑完即止，不驻留、不定时、不自动循环（已确认的非目标）
+6. **克制**：明确不做的事见下
 
 **Non-goals（不做）**：
 
 - 不做代理客户端：不长期驻留、不转发业务流量，只在检测期间建立临时隧道
-- P0/P1 不做常驻监控与告警推送（P2 再议）
-- 不做原生 GUI（用 `serve` 提供的 Web 界面替代，只读起步，交互式检测放 P1）
+- 不做常驻监控、定时巡检与告警推送（Webhook/邮件）--原 P2 的 `sub watch`、定时巡检已从计划中移除
+- 不做原生 GUI（用 `serve` 提供的 Web 界面替代）
 - 不做攻击性扫描：端口探测仅限用户显式指定的目标
 
 ## 3. 总体架构
@@ -98,18 +109,19 @@ netscope sub check    # 节点批量可用性（多目标 HTTP 状态码、建�
 netscope sub ping     # 延迟与丢包：TCP ping N 次，min/avg/max/抖动/丢包率            ★P0
 netscope sub speed    # 速度测试：经节点下载/上传测带宽                                 ★P0
 netscope sub rate     # 综合打分：跑多项检测，加权评分，输出 Top N 推荐 + HTML 报告      ★P0
+netscope sub unlock   # 流媒体/AI 解锁检测（Netflix/Disney+/YouTube/ChatGPT/Claude/Gemini/Telegram）★P1
+netscope sub info     # 订阅用量面板（流量剩余/使用率/到期倒计时）                      ★P1
 
 netscope route ping   # 本机 ping（ICMP，无权限时降级 TCP ping）
 netscope route trace  # 本机 TCP traceroute（无需 root）                                ★P0
+netscope route bloat  # bufferbloat：满载下载时的延迟变化，判断家庭网络拥塞              ★P1
 netscope port probe   # TCP/UDP 端口连通性（nc -zv 的替代）                             ★P0
 netscope http inspect # URL 体检：证书链/剩余有效期/TLS 版本与套件/HTTP 版本             ★P0
-netscope dns audit    # DNS 审计：多 resolver 解析对比、DoH 可用性                      ★P0
-netscope ip show      # 出口 IP 体检：国内外双视角出口 IP、归属地（国家/城市/ISP）        ★P0
+netscope dns audit    # DNS 审计：多 resolver 解析对比 + 污染检测 + EDNS 递归出口        ★P1 深化
+netscope ip show      # 出口 IP 体检：国内外双视角出口 IP、归属地、IP 风险分              ★P1 深化
 
-netscope sub unlock   # 流媒体/AI 解锁检测（Netflix/Disney+/ChatGPT/Claude/Gemini…）   P1
-netscope report diff  # 两次检测结果对比                                                P1
-netscope sub watch    # 稳定性长测（循环探测观察波动）                                    P2
-netscope serve        # Web 体检台：报告浏览 + 地址清单（添加地址、测可达/延迟/访问途径）  ★P0
+netscope report diff  # 两次评分快照对比（节点增删、评分/延迟/速度/出口变化）            ★P1
+netscope serve        # Web 体检台：报告浏览 + 地址清单（分组/导入导出）+ 全节点对比 + 趋势图 ★P0/P1
 ```
 
 诊断类子命令（route/port/http/dns）加 `--via <节点名|节点序号>` 即可把探测通道切到指定节点，
@@ -146,22 +158,37 @@ IP 质量初版仅含归属地展示与 IDC/代理标记（ip-api 字段），�
 - [ ] 所有子命令支持 `--json`；核心逻辑有单测；保留本地端到端测试
 - [ ] `go vet` 干净；单二进制交叉编译可过（至少 darwin/arm64、linux/amd64）
 
-### P1（第二批）
+### P1（第二批，已实现）
 
-- `sub unlock`：流媒体/AI 解锁检测（Netflix 原生/自制、Disney+、YouTube、ChatGPT/OpenAI、Claude、Gemini、Telegram），逐项标注
-- `report diff`：两次检测快照对比（节点增删、延迟变化、评分变化）
-- IP 质量深化：机房/家宽/代理标记细化、风险评分（可插拔数据源）
-- DNS 深化：污染特征检测、EDNS 出口归属
-- `sub ping` 的 UDP 能力探测（经节点 STUN/DNS-UDP）
-- `sub info`：订阅用量面板（流量剩余/到期倒计时，来自 `subscription-userinfo` 响应头）
-- bufferbloat：满载下载时的延迟变化（负载延迟），判断家庭网络拥塞
-- `serve` 深化：多次快照延迟/评分趋势图（SVG）；地址清单支持分组与导入导出、批量挂全部节点对比
+| # | 模块 | 内容 | 状态 |
+|---|---|---|---|
+| 1 | `sub unlock` | 流媒体/AI 解锁检测：Netflix（含仅自制剧）、Disney+、YouTube Premium（含地区）、ChatGPT、Claude、Gemini、Telegram，逐项标注；判定端点与规则移植自 [RegionRestrictionCheck](https://github.com/lmc999/RegionRestrictionCheck) | ✅ |
+| 2 | `report diff` | 两次 `sub rate` 快照对比：节点增删、评分/延迟/速度/出口变化，保留节点按 Δ分排序；无参数时自动取报告目录最新两个快照 | ✅ |
+| 3 | IP 质量深化 | ip-api 的 proxy/hosting/mobile 全标记；风险分 0-100（代理 45 + 机房 35 + 移动 10）；`IPQualitySource` 可插拔数据源接口（现注册 ip-api，后续可加源）；`ip show` 与 `sub rate` 评分接入风险分 | ✅ |
+| 4 | DNS 深化 | 污染检测：同一 resolver（Google）的明文 UDP 与 DoH 加密结果对比，完全不一致判定疑似在途注入；EDNS 递归出口：查 `o-o.myaddr.l.google.com` TXT，给出各 resolver 递归出口归属地与 EDNS Client Subnet | ✅ |
+| 5 | `sub ping --udp` | 经节点 STUN（RFC 5389 自实现）往返测量：验证节点 UDP 能力、取回出口地址、UDP 延迟/丢包统计；Tunnel 接口增加 `ListenPacket`/`SupportsUDP`（mihomo UDP 通道） | ✅ |
+| 6 | `sub info` | 订阅用量面板：`subscription-userinfo` 响应头（upload/download/total/expire，兼容毫秒时间戳），已用/剩余/使用率/到期倒计时 | ✅ |
+| 7 | `route bloat` | bufferbloat：空闲基准延迟 -> N 流并发下载满载持续测延迟 -> 恢复期观察；按平均延迟增量评级 A+/A/B/C/D；ICMP 优先、无权限降级 TCP | ✅ |
+| 8 | `serve` 深化 | 地址清单分组（可改分组、按组过滤）、JSON 导入导出；**全节点对比**（勾选地址 × 全部节点批量检测）；评分趋势图（SVG，按节点看多次快照的总分变化）；全部由按钮手动触发 | ✅ |
+
+**P1 验收补充**：
+
+- [x] `sub unlock`：输出 节点 × 服务 矩阵，✅ 解锁（含地区）/ 🟡 部分解锁 / ❌ 未解锁 / ⚠️ 失败；`--services` 过滤
+- [x] `report diff`：新增/移除/保留三段式表格 + 平均分汇总
+- [x] `dns audit`：污染检测与 EDNS 出口两节附加输出（实网验证：能识别 fake-IP 劫持/污染场景）
+- [x] `sub ping --udp`：STUN 编解码有单测；direct 通道 UDP 探测有本地端到端测试
+- [x] `route bloat`：三阶段流程 + 评级 + JSON 输出（实网验证通过）
+- [x] `sub info`：本地文件与 HTTP 头两条路径验证（含毫秒时间戳兼容）
+- [x] `serve`：分组/导入导出/全节点任务/趋势接口有 API 端到端测试
 
 ### P2（远期）
 
-- `sub watch`：长时稳定性测试（波动、掉线时间线）
-- 定时巡检 + webhook/邮件推送
 - YAML 配置文件预设（目标列表、解锁项、评分权重持久化）
+- 报告快照清理策略（按份数/天数保留）
+- 更多 IP 质量数据源（接入 `IPQualitySource`）、解锁服务扩充（TikTok/Spotify 等，探测端点需先调研）
+
+> 原 P2 的 `sub watch`（长时稳定性）与「定时巡检 + webhook/邮件推送」**已移除**：按已确认的触发原则，
+> 所有检测一次性手动触发，不做长期/自动/定时形态。
 
 ## 6. 已定的技术决策
 
@@ -169,23 +196,26 @@ IP 质量初版仅含归属地展示与 IDC/代理标记（ip-api 字段），�
 |---|---|---|
 | 语言/形态 | Go，单仓单二进制 | 可交叉编译、mihomo 是 Go 库 |
 | 协议栈 | 内嵌 mihomo 作为库 | 全协议覆盖，subcheck 已验证可行 |
-| IP 归属地 | ip-api.com（中文、免费），可关闭 | subcheck 已验证；更细风控留 P1 接口 |
-| 测速端点 | Cloudflare speed 端点 | 公开、全球节点多、可指定字节数 |
+| IP 归属地 | ip-api.com（中文、免费），`IPQualitySource` 接口可插拔 | subcheck 已验证；风险分模型：代理 45 + 机房 35 + 移动 10 |
+| 测速端点 | Cloudflare speed 端点 | 公开、全球节点多、可指定字节数（bufferbloat 也复用） |
 | traceroute | TCP 方式（递增 TTL 的 SYN 探测） | 无需 root/原始套接字权限 |
 | 订阅拉取 | 重试 2 次、按 type+server+port 去重 | 沿用 subcheck |
 | 输出约定 | 可用优先、耗时升序；退出码：存在可用节点为 0 否则 1 | 沿用 subcheck，脚本友好 |
 | 日志 | mihomo 日志静默（log.SILENT），进度走 stderr | 沿用 subcheck |
-| Web 服务 | 标准库 `net/http` + `embed` 内嵌模板与静态资源，前端无构建链（原生 JS/CSS） | 保持单二进制零依赖；局域网直接访问 |
+| Web 服务 | 标准库 `net/http` + `embed` 内嵌模板与静态资源，前端无构建链（原生 JS/CSS，SVG 趋势图不用图表库） | 保持单二进制零依赖；局域网直接访问 |
 | serve 监听 | 默认 `0.0.0.0:8420`，`--listen` 可改；`--token` 可选鉴权 | 局域网访问是硬需求；报告含节点/出口 IP 信息，鉴权留可选项 |
+| 解锁检测 | 判定端点与规则移植 RegionRestrictionCheck（Netflix 片源页 "Oh no!"、Disney+ bamgrid 三步握手、ChatGPT compliance/VPN 双探针、Claude 重定向、Gemini 页面特征、Telegram 官网页可达） | 社区长期维护、实网验证充分；不依赖其 cookies 文件，浏览器 UA 直测 |
+| UDP 能力探测 | STUN Binding Request/XOR-MAPPED-ADDRESS 自实现（RFC 5389 子集），经 Tunnel.ListenPacket 走 mihomo UDP 通道 | 无第三方依赖；出口地址与往返延迟一次拿到 |
+| 触发模型 | 所有检测一次性手动触发（CLI 命令 / Web 按钮），任务进度用轮询 | 用户已确认不做常驻/定时/自动检测 |
 
 ## 7. 待定问题（实现会话中决策）
 
-1. CLI 框架：标准库 flag 子命令 vs cobra（倾向标准库，保持零依赖）
-2. HTML 报告形态：内嵌 `html/template` + 内联 CSS 单文件（倾向）；是否引入图表库（倾向不引入，用 CSS 条形图）
-3. 解锁检测的探测端点与判定规则（P1 前调研，参考 RegionRestrictionCheck 的做法）
-4. 评分权重默认值与归一化细节
-5. 诊断子命令的 `--via` 选择节点方式：名称 / 序号 / 交互式选择
-6. go module 名（`netscope` 或带 host 的完整路径）
-7. `serve` 鉴权默认值：纯内网信任不鉴权 vs 首次启动生成随机 token（报告含节点与出口 IP 信息）
-8. `serve` 交互式检测（P1）的进度推送方式：SSE vs WebSocket vs 轮询
-9. 报告快照清理策略（按份数/天数保留）与报告目录布局
+1. ~~CLI 框架~~：已定标准库 flag 子命令（`parseMixed` 支持位置参数与 flag 混排）
+2. ~~HTML 报告形态~~：已定 `html/template` + 内联 CSS 单文件，不引入图表库
+3. ~~解锁检测的探测端点与判定规则~~：已定，见技术决策表
+4. 评分权重默认值与归一化细节：P0 初版已定（20/30/30/20，IP 质量改按风险分折算），后续视使用体验调整
+5. ~~`--via` 选择节点方式~~：已定名称精确匹配 / 序号（1 起）
+6. ~~go module 名~~：已定 `netscope`
+7. ~~`serve` 鉴权默认值~~：已定默认不鉴权，`--token` 可选
+8. ~~serve 交互式检测的进度推送~~：已定轮询（700ms），无 SSE/WebSocket
+9. 报告快照清理策略（按份数/天数保留）：P2 再做，当前目录会累积 `rate-时间戳.{html,json}`

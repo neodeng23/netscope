@@ -19,18 +19,23 @@ const usageText = `netscope - 一站式网络体检工具
 
 用法:
   netscope sub check   [-sub 链接/文件]... [-t URL]...     节点批量可用性（状态码/耗时/出口IP）
-  netscope sub ping    [-sub ...] [-t URL] [-n 次数]       节点延迟与丢包（TCP ping）
+  netscope sub ping    [-sub ...] [-t URL] [-n 次数]       节点延迟与丢包（TCP ping，--udp 附 STUN 探测）
   netscope sub speed   [-sub ...] [--size 字节] [--dur 秒]  节点测速（Cloudflare）
   netscope sub rate    [-sub ...] [--top N]                综合评分 + Top N + HTML 报告
+  netscope sub unlock  [-sub ...] [--services 名单]        流媒体/AI 解锁检测（Netflix/Disney+/ChatGPT…）
+  netscope sub info    [-sub 链接]...                      订阅用量面板（流量剩余/到期）
   netscope route ping  <主机> [-n 次数]                     本机 ICMP ping（无权限降级 TCP）
   netscope route trace <主机> [-mttl 最大跳数]              UDP traceroute（免 root）
+  netscope route bloat [主机] [--dur 秒] [--streams N]     bufferbloat：满载下载时的延迟变化
   netscope port probe  <主机> -p <端口>[/tcp|/udp]...      端口连通性
   netscope http inspect <URL> [--via 节点]                 证书/TLS/HTTP 版本体检
-  netscope dns audit   <域名> [--via 节点]                 多 resolver 解析对比 + DoH
-  netscope ip show     [--via 节点]                        国内外出口 IP 双视角
+  netscope dns audit   <域名> [--via 节点]                 多 resolver 对比 + 污染检测 + EDNS 出口
+  netscope ip show     [--via 节点]                        国内外出口 IP 双视角 + IP 风险分
+  netscope report diff [旧.json 新.json]                   两次评分快照对比（默认取最新两个）
   netscope serve       [--listen 0.0.0.0:8420] [--sub 订阅] Web 体检台（局域网）
 
 通用: --json 路径 输出 JSON（"-" 为 stdout）；--csv 文件；--via 支持 节点名 或 序号(1起)
+所有检测均为一次性手动触发，不驻留、不定时、不自动循环。
 `
 
 func usage() {
@@ -102,7 +107,7 @@ func main() {
 	group, cmd := os.Args[1], ""
 	args := os.Args[2:]
 	switch group {
-	case "sub", "route", "port", "http", "dns", "ip":
+	case "sub", "route", "port", "http", "dns", "ip", "report":
 		if len(args) == 0 {
 			usage()
 			os.Exit(2)
@@ -120,10 +125,16 @@ func main() {
 		code = cmdSubSpeed(ctx, args)
 	case "sub rate":
 		code = cmdSubRate(ctx, args)
+	case "sub unlock":
+		code = cmdSubUnlock(ctx, args)
+	case "sub info":
+		code = cmdSubInfo(ctx, args)
 	case "route ping":
 		code = cmdRoutePing(ctx, args)
 	case "route trace":
 		code = cmdRouteTrace(ctx, args)
+	case "route bloat":
+		code = cmdRouteBloat(ctx, args)
 	case "port probe":
 		code = cmdPortProbe(ctx, args)
 	case "http inspect":
@@ -132,10 +143,12 @@ func main() {
 		code = cmdDNSAudit(ctx, args)
 	case "ip show":
 		code = cmdIPShow(ctx, args)
+	case "report diff":
+		code = cmdReportDiff(ctx, args)
 	case "serve":
 		code = cmdServe(ctx, args)
 	case "version":
-		fmt.Println("netscope 0.1.0 (P0)")
+		fmt.Println("netscope 0.2.0 (P1)")
 	default:
 		usage()
 		os.Exit(2)
@@ -154,11 +167,11 @@ func (m *multiFlag) Set(v string) error {
 }
 
 type subFlags struct {
-	subs     *multiFlag
-	include  *multiFlag
-	exclude  *multiFlag
-	conc     *int
-	timeout  *secsDur
+	subs    *multiFlag
+	include *multiFlag
+	exclude *multiFlag
+	conc    *int
+	timeout *secsDur
 }
 
 func addSubFlags(fs *flag.FlagSet, defaultConc int) *subFlags {
@@ -245,6 +258,8 @@ func cmdSubPing(ctx context.Context, args []string) int {
 	target := fs.String("t", "https://www.gstatic.com/generate_204", "ping 目标（取其 host:port）")
 	count := fs.Int("n", 5, "每节点 ping 次数")
 	interval := fs.Duration("interval", 300*time.Millisecond, "ping 间隔")
+	udpFlag := fs.Bool("udp", false, "附加 STUN UDP 探测（节点 UDP 能力与出口）")
+	stun := fs.String("stun", "stun.l.google.com:19302", "--udp 使用的 STUN 服务器")
 	jsonOut := fs.String("json", "", "JSON 输出路径（- 为 stdout）")
 	csvOut := fs.String("csv", "", "CSV 输出路径")
 	fs.Parse(args)
@@ -256,6 +271,7 @@ func cmdSubPing(ctx context.Context, args []string) int {
 	nodes := sf.load(ctx)
 	var mu sync.Mutex
 	var stats []PingStats
+	udpRes := map[string]UDPPingResult{}
 	var tasks []func(context.Context)
 	for _, n := range nodes {
 		n := n
@@ -269,11 +285,25 @@ func cmdSubPing(ctx context.Context, args []string) int {
 			} else {
 				Progress("  %s avg %.1fms\n", n.Name(), st.AvgMs)
 			}
+			if *udpFlag {
+				ur := STUNPing(ctx, n, *stun, *count, sf.timeout.Duration, *interval)
+				mu.Lock()
+				udpRes[n.Name()] = ur
+				mu.Unlock()
+				if ur.OK {
+					Progress("  %s UDP ✅ %s\n", n.Name(), ur.ExitAddr)
+				} else {
+					Progress("  %s UDP ❌ %s\n", n.Name(), ur.Err)
+				}
+			}
 		})
 	}
 	RunParallel(ctx, *sf.conc, tasks)
 
 	headers := []string{"节点", "目标", "发送", "接收", "丢包%", "min(ms)", "avg(ms)", "max(ms)", "抖动(ms)"}
+	if *udpFlag {
+		headers = append(headers, "UDP")
+	}
 	var rows [][]string
 	anyOK := false
 	for _, st := range stats {
@@ -284,12 +314,31 @@ func cmdSubPing(ctx context.Context, args []string) int {
 		} else {
 			row = append(row, "-", "-", "-", "-")
 		}
+		if *udpFlag {
+			row = append(row, udpCell(udpRes[st.Node]))
+		}
 		rows = append(rows, row)
 	}
 	PrintTable(headers, rows)
-	writeJSONIfSet(*jsonOut, map[string]any{"results": stats})
+	out := map[string]any{"results": stats}
+	if *udpFlag {
+		out["udp"] = udpRes
+	}
+	writeJSONIfSet(*jsonOut, out)
 	writeCSVIfSet(*csvOut, headers, rows)
 	return boolCode(anyOK)
+}
+
+// udpCell 把 UDP 探测结果格式化为表格单元。
+func udpCell(u UDPPingResult) string {
+	switch {
+	case !u.Supported:
+		return "❌ 不支持"
+	case u.OK:
+		return "✅ " + u.ExitAddr
+	default:
+		return "❌"
+	}
 }
 
 func cmdSubSpeed(ctx context.Context, args []string) int {
@@ -523,7 +572,8 @@ func cmdDNSAudit(ctx context.Context, args []string) int {
 		fatalf("用法: netscope dns audit <域名>")
 	}
 	t := resolveVia(ctx, *via, *sub)
-	results := DNSAudit(ctx, pos[0], t)
+	res := DNSAudit(ctx, pos[0], t)
+	results := res.Resolvers
 	headers := []string{"Resolver", "类型", "A 记录", "TTL", "耗时(ms)", "错误"}
 	var rows [][]string
 	for _, r := range results {
@@ -554,7 +604,28 @@ func cmdDNSAudit(ctx context.Context, args []string) int {
 			fmt.Printf("  %s <- %s\n", strings.ReplaceAll(s, ",", ", "), strings.Join(rs, "、"))
 		}
 	}
-	writeJSONIfSet(*jsonOut, map[string]any{"results": results})
+	if p := res.Pollution; p != nil {
+		icon := "ℹ️"
+		if p.Polluted {
+			icon = "⚠️"
+		}
+		fmt.Printf("\n%s 污染检测（%s）：%s\n", icon, p.Domain, p.Note)
+		fmt.Printf("   明文 UDP: %s\n   加密 DoH: %s\n", orDash(strings.Join(p.UDPAddrs, " ")), orDash(strings.Join(p.DoHAddrs, " ")))
+	}
+	if len(res.EDNS) > 0 {
+		fmt.Println("\n递归出口与 EDNS Client Subnet（o-o.myaddr.l.google.com）：")
+		eh := []string{"Resolver", "递归出口", "出口归属地", "ECS"}
+		var erows [][]string
+		for _, e := range res.EDNS {
+			egress := "-"
+			if len(e.EgressIPs) > 0 {
+				egress = strings.Join(e.EgressIPs, " ")
+			}
+			erows = append(erows, []string{e.Resolver, egress, orDash(e.EgressLoc), orDash(e.ECS)})
+		}
+		PrintTable(eh, erows)
+	}
+	writeJSONIfSet(*jsonOut, res)
 	return 0
 }
 
@@ -565,19 +636,23 @@ func cmdIPShow(ctx context.Context, args []string) int {
 	fs.Parse(args)
 	t := resolveVia(ctx, *via, *sub)
 	r := IPShow(ctx, t)
-	headers := []string{"视角", "出口IP", "归属地", "标记"}
+	headers := []string{"视角", "出口IP", "归属地", "标记", "风险分"}
 	var rows [][]string
 	if r.Domestic != nil {
-		rows = append(rows, []string{"国内(ipip.net)", r.Domestic.IP, r.Domestic.Desc, "-"})
+		rows = append(rows, []string{"国内(ipip.net)", r.Domestic.IP, r.Domestic.Desc, "-", "-"})
 	} else {
-		rows = append(rows, []string{"国内(ipip.net)", "查询失败", r.IPInternalErr, "-"})
+		rows = append(rows, []string{"国内(ipip.net)", "查询失败", r.IPInternalErr, "-", "-"})
 	}
 	if r.Global != nil {
-		rows = append(rows, []string{"国际(ip-api)", r.Global.Query, r.Global.Location(), r.Global.Flags()})
+		risk := "-"
+		if v := r.Global.RiskScore(); v >= 0 {
+			risk = strconv.Itoa(v)
+		}
+		rows = append(rows, []string{"国际(ip-api)", r.Global.Query, r.Global.Location(), r.Global.Flags(), risk})
 	} else {
-		rows = append(rows, []string{"国际(ip-api)", "查询失败", r.GlobalErr, "-"})
+		rows = append(rows, []string{"国际(ip-api)", "查询失败", r.GlobalErr, "-", "-"})
 	}
-	rows = append(rows, []string{"通道", r.Via, "-", "-"})
+	rows = append(rows, []string{"通道", r.Via, "-", "-", "-"})
 	PrintTable(headers, rows)
 	writeJSONIfSet(*jsonOut, r)
 	return boolCode(r.Domestic != nil || r.Global != nil)

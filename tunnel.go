@@ -13,20 +13,31 @@ import (
 
 // Tunnel 是一条可复用的探测通道：direct 或某个代理节点。
 type Tunnel interface {
-	Name() string            // "direct" 或节点名
-	Type() string            // "direct" / "ss" / "vmess" ...
-	Server() string          // 节点 server:port，direct 为空
+	Name() string   // "direct" 或节点名
+	Type() string   // "direct" / "ss" / "vmess" ...
+	Server() string // 节点 server:port，direct 为空
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+	// UDP 能力（STUN / DNS-UDP 探测用）：addr 为目标 host:port，
+	// 返回的 PacketConn 向该地址收发报文即走隧道。
+	SupportsUDP() bool
+	ListenPacket(ctx context.Context, addr string) (net.PacketConn, error)
 }
 
 type directTunnel struct{}
 
-func (directTunnel) Name() string    { return "direct" }
-func (directTunnel) Type() string    { return "direct" }
-func (directTunnel) Server() string  { return "" }
+func (directTunnel) Name() string   { return "direct" }
+func (directTunnel) Type() string   { return "direct" }
+func (directTunnel) Server() string { return "" }
 func (directTunnel) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	var d net.Dialer
 	return d.DialContext(ctx, network, addr)
+}
+
+func (directTunnel) SupportsUDP() bool { return true }
+
+func (directTunnel) ListenPacket(ctx context.Context, addr string) (net.PacketConn, error) {
+	var lc net.ListenConfig
+	return lc.ListenPacket(ctx, "udp", ":0")
 }
 
 // Direct 是全局唯一直连通道。
@@ -59,6 +70,26 @@ func (p *proxyTunnel) DialContext(ctx context.Context, network, addr string) (ne
 		DstPort: uint16(port),
 	}
 	return p.proxy.DialContext(ctx, md)
+}
+
+func (p *proxyTunnel) SupportsUDP() bool { return p.proxy.SupportUDP() }
+
+func (p *proxyTunnel) ListenPacket(ctx context.Context, addr string) (net.PacketConn, error) {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, err
+	}
+	md := &C.Metadata{
+		NetWork: C.UDP,
+		Type:    C.INNER,
+		Host:    host,
+		DstPort: uint16(port),
+	}
+	return p.proxy.ListenPacketContext(ctx, md)
 }
 
 func newProxyTunnel(p C.ProxyAdapter) (Tunnel, error) {

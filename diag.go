@@ -19,11 +19,11 @@ import (
 // ---------- port probe ----------
 
 type PortResult struct {
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	Proto   string `json:"proto"` // tcp / udp
-	State   string `json:"state"` // open / closed / filtered / open|filtered
-	Err     string `json:"err,omitempty"`
+	Host      string  `json:"host"`
+	Port      int     `json:"port"`
+	Proto     string  `json:"proto"` // tcp / udp
+	State     string  `json:"state"` // open / closed / filtered / open|filtered
+	Err       string  `json:"err,omitempty"`
 	LatencyMs float64 `json:"latencyMs,omitempty"`
 }
 
@@ -154,21 +154,21 @@ func probeUDP(ctx context.Context, t Tunnel, host string, port int, timeout time
 // ---------- http inspect ----------
 
 type InspectResult struct {
-	URL         string `json:"url"`
-	Via         string `json:"via"`
-	RemoteAddr  string `json:"remoteAddr,omitempty"`
-	HTTPVersion string `json:"httpVersion,omitempty"`
-	Status      int    `json:"status,omitempty"`
-	TLSVersion  string `json:"tlsVersion,omitempty"`
-	CipherSuite string `json:"cipherSuite,omitempty"`
-	ALPN        string `json:"alpn,omitempty"`
-	CertIssuer  string `json:"certIssuer,omitempty"`
-	CertSubject string `json:"certSubject,omitempty"`
-	CertSANs    int    `json:"certSans"`
-	ChainDepth  int    `json:"chainDepth"`
-	DaysLeft    int    `json:"certDaysLeft"`
+	URL         string   `json:"url"`
+	Via         string   `json:"via"`
+	RemoteAddr  string   `json:"remoteAddr,omitempty"`
+	HTTPVersion string   `json:"httpVersion,omitempty"`
+	Status      int      `json:"status,omitempty"`
+	TLSVersion  string   `json:"tlsVersion,omitempty"`
+	CipherSuite string   `json:"cipherSuite,omitempty"`
+	ALPN        string   `json:"alpn,omitempty"`
+	CertIssuer  string   `json:"certIssuer,omitempty"`
+	CertSubject string   `json:"certSubject,omitempty"`
+	CertSANs    int      `json:"certSans"`
+	ChainDepth  int      `json:"chainDepth"`
+	DaysLeft    int      `json:"certDaysLeft"`
 	Notes       []string `json:"notes,omitempty"`
-	Err         string  `json:"err,omitempty"`
+	Err         string   `json:"err,omitempty"`
 }
 
 func tlsVersionName(v uint16) string {
@@ -210,9 +210,9 @@ func InspectHTTP(ctx context.Context, t Tunnel, rawURL string, timeout time.Dura
 
 	// 1) HTTP 状态与版本（ALPN 协商真实 HTTP 版本）
 	tr := &http.Transport{
-		DialContext:        t.DialContext,
-		DialTLSContext:     dialTLSVia(t, &tls.Config{NextProtos: []string{"h2", "http/1.1"}}),
-		ForceAttemptHTTP2:  true,
+		DialContext:       t.DialContext,
+		DialTLSContext:    dialTLSVia(t, &tls.Config{NextProtos: []string{"h2", "http/1.1"}}),
+		ForceAttemptHTTP2: true,
 	}
 	hctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -305,12 +305,12 @@ func dnString(d pkix.Name) string {
 // ---------- dns audit ----------
 
 type DNSResult struct {
-	Resolver string  `json:"resolver"` // 名称或地址
-	Type     string  `json:"type"`     // udp / doh / system
+	Resolver string   `json:"resolver"` // 名称或地址
+	Type     string   `json:"type"`     // udp / doh / system
 	Addrs    []string `json:"addrs,omitempty"`
-	TTL      uint32  `json:"ttl,omitempty"`
-	RttMs    float64 `json:"rttMs"`
-	Err      string  `json:"err,omitempty"`
+	TTL      uint32   `json:"ttl,omitempty"`
+	RttMs    float64  `json:"rttMs"`
+	Err      string   `json:"err,omitempty"`
 }
 
 var defaultResolvers = []struct{ label, addr string }{
@@ -325,9 +325,36 @@ var defaultDoH = []struct{ label, url string }{
 	{"DoH cloudflare", "https://cloudflare-dns.com/dns-query?name=%s&type=A"},
 }
 
-// DNSAudit 对比多个 resolver 对 domain 的 A 解析。via 非空时 DoH 查询经该通道。
-func DNSAudit(ctx context.Context, domain string, via Tunnel) []DNSResult {
-	var out []DNSResult
+// DNSAuditResult 是 dns audit 的完整结果：多 resolver 对比 + 污染检测 + 递归出口。
+type DNSAuditResult struct {
+	Resolvers []DNSResult   `json:"resolvers"`
+	Pollution *DNSPollution `json:"pollution,omitempty"`
+	EDNS      []EDNSResult  `json:"edns,omitempty"`
+}
+
+// DNSPollution 是明文查询与加密查询的对比结果。
+type DNSPollution struct {
+	Domain   string   `json:"domain"`
+	UDPAddrs []string `json:"udpAddrs,omitempty"` // 明文 UDP 查 8.8.8.8 的结果
+	DoHAddrs []string `json:"dohAddrs,omitempty"` // DoH 查 dns.google 的结果（参照）
+	DoHErr   string   `json:"dohErr,omitempty"`
+	Polluted bool     `json:"polluted"`
+	Note     string   `json:"note,omitempty"`
+}
+
+// EDNSResult 是 resolver 递归出口与 EDNS Client Subnet 探测结果。
+type EDNSResult struct {
+	Resolver  string   `json:"resolver"`
+	EgressIPs []string `json:"egressIps,omitempty"` // 递归 resolver 的出口 IP
+	EgressLoc string   `json:"egressLoc,omitempty"` // 出口归属地
+	ECS       string   `json:"ecs,omitempty"`       // 暴露给权威的客户端网段
+	Err       string   `json:"err,omitempty"`
+}
+
+// DNSAudit 对比多个 resolver 对 domain 的 A 解析，并做污染检测与 EDNS 出口探测。
+// via 非空时 DoH 查询经该通道；明文 UDP 查询始终走本机直连（那正是要观测的路径）。
+func DNSAudit(ctx context.Context, domain string, via Tunnel) DNSAuditResult {
+	res := DNSAuditResult{}
 	// 系统 resolver
 	start := time.Now()
 	sysAddrs, err := net.DefaultResolver.LookupHost(ctx, domain)
@@ -338,18 +365,132 @@ func DNSAudit(ctx context.Context, domain string, via Tunnel) []DNSResult {
 	} else {
 		sys.Addrs = dedupeIPs(sysAddrs)
 	}
-	out = append(out, sys)
+	res.Resolvers = append(res.Resolvers, sys)
 
 	// 标准 UDP resolver（本机直连视角）
 	for _, rs := range defaultResolvers {
-		out = append(out, queryDNSUDP(ctx, rs.label, rs.addr, domain, 2*time.Second))
+		res.Resolvers = append(res.Resolvers, queryDNSUDP(ctx, rs.label, rs.addr, domain, 2*time.Second))
 	}
 
 	// DoH（可经 --via）
 	for _, d := range defaultDoH {
-		out = append(out, queryDoH(ctx, d.label, d.url, domain, via, 5*time.Second))
+		res.Resolvers = append(res.Resolvers, queryDoH(ctx, d.label, d.url, domain, via, 5*time.Second))
+	}
+
+	res.Pollution = checkDNSPollution(ctx, domain, via)
+	res.EDNS = checkEDNS(ctx)
+	return res
+}
+
+// checkDNSPollution 对比同一 resolver（Google）的明文 UDP 与 DoH 加密结果：
+// 完全不一致说明明文查询在途中被注入了假响应（典型 DNS 污染特征）。
+func checkDNSPollution(ctx context.Context, domain string, via Tunnel) *DNSPollution {
+	p := &DNSPollution{Domain: domain}
+	udp := queryDNSUDP(ctx, "8.8.8.8（明文）", "8.8.8.8:53", domain, 3*time.Second)
+	p.UDPAddrs = udp.Addrs
+	doh := queryDoH(ctx, "dns.google（加密参照）", "https://dns.google/resolve?name=%s&type=A", domain, via, 6*time.Second)
+	p.DoHAddrs = doh.Addrs
+	if len(doh.Addrs) == 0 {
+		p.DoHErr = doh.Err
+		p.Note = "加密参照不可用（可加 --via 节点重试），无法判定"
+		return p
+	}
+	if len(udp.Addrs) == 0 {
+		p.Note = "明文 UDP 查询失败: " + udp.Err
+		return p
+	}
+	if sameIPSet(udp.Addrs, doh.Addrs) {
+		p.Note = "明文与加密查询结果一致，无污染迹象"
+		return p
+	}
+	p.Polluted = disjointIPSet(udp.Addrs, doh.Addrs)
+	if p.Polluted {
+		p.Note = "明文查询结果与加密查询完全不一致，疑似在途注入（污染）"
+	} else {
+		p.Note = "结果不完全一致但有交集，可能是地理解析差异"
+	}
+	return p
+}
+
+func sameIPSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := map[string]bool{}
+	for _, s := range a {
+		set[s] = true
+	}
+	for _, s := range b {
+		if !set[s] {
+			return false
+		}
+	}
+	return true
+}
+
+func disjointIPSet(a, b []string) bool {
+	set := map[string]bool{}
+	for _, s := range a {
+		set[s] = true
+	}
+	for _, s := range b {
+		if set[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// checkEDNS 查询 o-o.myaddr.l.google.com 的 TXT 记录：
+// 第一条是 resolver 递归出口 IP，第二条（如有）是 EDNS Client Subnet。
+func checkEDNS(ctx context.Context) []EDNSResult {
+	var out []EDNSResult
+	for _, rs := range defaultResolvers {
+		r := EDNSResult{Resolver: rs.label}
+		txts, err := queryTXTUDP(ctx, rs.addr, "o-o.myaddr.l.google.com", 3*time.Second)
+		if err != nil {
+			r.Err = cleanErr(err)
+			out = append(out, r)
+			continue
+		}
+		for _, txt := range txts {
+			if strings.Contains(txt, "/") {
+				r.ECS = strings.TrimPrefix(strings.TrimSpace(txt), "edns0-client-subnet ")
+			} else if net.ParseIP(txt) != nil {
+				r.EgressIPs = append(r.EgressIPs, txt)
+			}
+		}
+		if len(r.EgressIPs) > 0 {
+			if info, err := LookupIP(ctx, Direct, r.EgressIPs[0]); err == nil {
+				r.EgressLoc = info.Location()
+			}
+		}
+		out = append(out, r)
 	}
 	return out
+}
+
+// queryTXTUDP 向 addr 查询 domain 的 TXT 记录（UDP，本机直连）。
+func queryTXTUDP(ctx context.Context, addr, domain string, timeout time.Duration) ([]string, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialUDP("udp4", nil, udpAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(buildDNSQuery(domain, 16)); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 1500)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	return parseDNSTXT(buf[:n]), nil
 }
 
 func queryDNSUDP(ctx context.Context, label, addr, domain string, timeout time.Duration) DNSResult {
@@ -458,8 +599,8 @@ func dedupeIPs(in []string) []string {
 
 func buildDNSQuery(domain string, qtype uint16) []byte {
 	var b []byte
-	b = append(b, 0x12, 0x34) // ID
-	b = append(b, 0x01, 0x00) // flags: RD=1
+	b = append(b, 0x12, 0x34)             // ID
+	b = append(b, 0x01, 0x00)             // flags: RD=1
 	b = append(b, 0, 1, 0, 0, 0, 0, 0, 0) // QDCOUNT=1, AN/NS/AR=0
 	for _, label := range strings.Split(domain, ".") {
 		if label == "" {
@@ -474,26 +615,20 @@ func buildDNSQuery(domain string, qtype uint16) []byte {
 	return b
 }
 
-// parseDNSAnswers 解析响应中的 A 记录（支持名字压缩指针）。
-func parseDNSAnswers(msg []byte) ([]string, uint32) {
-	if len(msg) < 12 {
-		return nil, 0
-	}
-	qd := binary.BigEndian.Uint16(msg[4:6])
-	an := binary.BigEndian.Uint16(msg[6:8])
+// skipDNSQuestion 返回 answer 区起始偏移；qd 为 question 数，失败返回 -1。
+func skipDNSQuestion(msg []byte, qd int) int {
 	p := 12
-	// 跳过 question
 	for i := 0; i < int(qd); i++ {
 		for {
 			if p >= len(msg) {
-				return nil, 0
+				return -1
 			}
 			l := int(msg[p])
 			p++
 			if l == 0 {
 				break
 			}
-			if l&0xc0 == 0xc0 {
+			if l&0xc0 == 0xc0 { // 压缩指针占 2 字节
 				p++
 				break
 			}
@@ -501,26 +636,43 @@ func parseDNSAnswers(msg []byte) ([]string, uint32) {
 		}
 		p += 4
 	}
+	return p
+}
+
+// skipDNSName 跳过 answer 中的名字字段（可能是压缩指针），返回新偏移，失败返回 -1。
+func skipDNSName(msg []byte, p int) int {
+	if p < len(msg) && msg[p]&0xc0 == 0xc0 {
+		return p + 2
+	}
+	for {
+		if p >= len(msg) {
+			return -1
+		}
+		l := int(msg[p])
+		p++
+		if l == 0 {
+			return p
+		}
+		p += l
+	}
+}
+
+// parseDNSAnswers 解析响应中的 A 记录（支持名字压缩指针）。
+func parseDNSAnswers(msg []byte) ([]string, uint32) {
+	if len(msg) < 12 {
+		return nil, 0
+	}
+	qd := binary.BigEndian.Uint16(msg[4:6])
+	an := binary.BigEndian.Uint16(msg[6:8])
+	p := skipDNSQuestion(msg, int(qd))
+	if p < 0 {
+		return nil, 0
+	}
 	var addrs []string
 	var ttl uint32
 	for i := 0; i < int(an) && p < len(msg); i++ {
-		// name（可能是指针）
-		if p < len(msg) && msg[p]&0xc0 == 0xc0 {
-			p += 2
-		} else {
-			for {
-				if p >= len(msg) {
-					return addrs, ttl
-				}
-				l := int(msg[p])
-				p++
-				if l == 0 {
-					break
-				}
-				p += l
-			}
-		}
-		if p+10 > len(msg) {
+		p = skipDNSName(msg, p)
+		if p < 0 || p+10 > len(msg) {
 			break
 		}
 		typ := binary.BigEndian.Uint16(msg[p : p+2])
@@ -538,14 +690,55 @@ func parseDNSAnswers(msg []byte) ([]string, uint32) {
 	return addrs, ttl
 }
 
+// parseDNSTXT 解析响应中的 TXT 记录（rdata 是若干 length-prefixed 字符串）。
+func parseDNSTXT(msg []byte) []string {
+	if len(msg) < 12 {
+		return nil
+	}
+	qd := binary.BigEndian.Uint16(msg[4:6])
+	an := binary.BigEndian.Uint16(msg[6:8])
+	p := skipDNSQuestion(msg, int(qd))
+	if p < 0 {
+		return nil
+	}
+	var txts []string
+	for i := 0; i < int(an) && p < len(msg); i++ {
+		p = skipDNSName(msg, p)
+		if p < 0 || p+10 > len(msg) {
+			break
+		}
+		typ := binary.BigEndian.Uint16(msg[p : p+2])
+		rdlen := int(binary.BigEndian.Uint16(msg[p+8 : p+10]))
+		p += 10
+		if typ == 16 && p+rdlen <= len(msg) {
+			var sb strings.Builder
+			q := p
+			for q < p+rdlen {
+				l := int(msg[q])
+				q++
+				if q+l > p+rdlen {
+					break
+				}
+				sb.Write(msg[q : q+l])
+				q += l
+			}
+			if sb.Len() > 0 {
+				txts = append(txts, sb.String())
+			}
+		}
+		p += rdlen
+	}
+	return txts
+}
+
 // ---------- ip show ----------
 
 type IPShowResult struct {
-	Via      string `json:"via"`
-	Domestic *ipipResult `json:"domestic,omitempty"`
-	IPInternalErr string `json:"domesticErr,omitempty"`
-	Global   *IPInfo `json:"global,omitempty"`
-	GlobalErr string `json:"globalErr,omitempty"`
+	Via           string      `json:"via"`
+	Domestic      *ipipResult `json:"domestic,omitempty"`
+	IPInternalErr string      `json:"domesticErr,omitempty"`
+	Global        *IPInfo     `json:"global,omitempty"`
+	GlobalErr     string      `json:"globalErr,omitempty"`
 }
 
 // IPShow 国内外双视角出口 IP 体检。

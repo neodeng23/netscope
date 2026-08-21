@@ -379,6 +379,7 @@ func cmdSubSpeed(ctx context.Context, args []string) int {
 	size := fs.Int64("size", 50<<20, "单节点最大下载字节")
 	durFlag := secsDur{10 * time.Second}
 	fs.Var(&durFlag, "dur", "单节点最长测速时长")
+	upload := fs.Bool("upload", false, "同时测试上传（Cloudflare __up）")
 	jsonOut := fs.String("json", "", "JSON 输出路径（- 为 stdout）")
 	fs.Parse(args)
 
@@ -390,11 +391,20 @@ func cmdSubSpeed(ctx context.Context, args []string) int {
 		n := n
 		tasks = append(tasks, func(ctx context.Context) {
 			r := MeasureSpeed(ctx, n, *size, durFlag.Duration)
+			if *upload {
+				up := MeasureUpload(ctx, n, *size, durFlag.Duration)
+				r.UpMbps = up.UpMbps
+				if r.Err == "" && up.Err != "" && up.UpMbps == 0 {
+					r.Err = "上传失败: " + up.Err
+				}
+			}
 			mu.Lock()
 			results = append(results, r)
 			mu.Unlock()
 			if r.Err != "" {
 				Progress("  %s 失败: %s\n", n.Name(), r.Err)
+			} else if *upload {
+				Progress("  %s ↓ %.1f / ↑ %.1f Mbps\n", n.Name(), r.DownMbps, r.UpMbps)
 			} else {
 				Progress("  %s ↓ %.1f Mbps\n", n.Name(), r.DownMbps)
 			}
@@ -402,16 +412,29 @@ func cmdSubSpeed(ctx context.Context, args []string) int {
 	}
 	RunParallel(ctx, *sf.conc, tasks)
 
-	headers := []string{"节点", "下载Mbps", "读取MB", "用时s"}
+	headers := []string{"节点", "下载Mbps"}
+	if *upload {
+		headers = append(headers, "上传Mbps")
+	}
+	headers = append(headers, "读取MB", "用时s")
 	var rows [][]string
 	anyOK := false
 	for _, r := range results {
 		row := []string{r.Node}
 		if r.Err != "" {
-			row = append(row, "失败("+shortErr(r.Err)+")", "-", "-")
+			bad := "失败(" + shortErr(r.Err) + ")"
+			row = append(row, bad)
+			if *upload {
+				row = append(row, "-")
+			}
+			row = append(row, "-", "-")
 		} else {
 			anyOK = true
-			row = append(row, f1(r.DownMbps), f1(float64(r.BytesRead)/(1<<20)), f1(r.DurationS))
+			row = append(row, f1(r.DownMbps))
+			if *upload {
+				row = append(row, f1(r.UpMbps))
+			}
+			row = append(row, f1(float64(r.BytesRead)/(1<<20)), f1(r.DurationS))
 		}
 		rows = append(rows, row)
 	}

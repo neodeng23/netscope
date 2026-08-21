@@ -138,7 +138,7 @@ netscope serve        # Web 体检台：报告浏览 + 地址清单（分组/导
 |---|---|---|
 | 1 | CLI 骨架 + 迁移 | 子命令框架；`sub check` 与 subcheck 功能等价 |
 | 2 | 延迟丢包 | `sub ping`：经节点对目标 N 次 TCP ping，输出 min/avg/max/jitter/丢包率 |
-| 3 | 速度测试 | `sub speed`：Cloudflare 测速端点，经节点下载（上传可选），输出 Mbps；`--size/--duration` 控制流量 |
+| 3 | 速度测试 | `sub speed`：Cloudflare 测速端点，经节点下载，`--upload` 同时测上传，输出 Mbps；`--size/--dur` 控制流量 |
 | 4 | 本机诊断套件 | `route ping`、`route trace`（TCP traceroute）、`port probe`、`http inspect`（证书/TLS/HTTP 版本）、`dns audit`、`ip show`（国内外双视角出口 IP、归属地国家/城市/ISP） |
 | 5 | HTML 报告 + 评分 | `sub rate`：一次跑多项检测 -> 加权评分 -> Top N 推荐 + 自包含 HTML 报告（内嵌 CSS，单文件可分享），快照落盘到报告目录 |
 | 6 | Web 体检台 | `serve`：默认监听 `0.0.0.0:8420`（`--listen` 可改），局域网直接访问；托管报告目录（默认 `~/.netscope/reports/`）历史列表 + 在线查看；**地址清单**：网页上增删目标地址（持久化 `~/.netscope/targets.json`），一键检测--可达性/状态码、延迟、访问途径（直连或经指定节点、出口落地国家），实时进度 |
@@ -148,18 +148,18 @@ IP 质量初版仅含归属地展示与 IDC/代理标记（ip-api 字段），�
 
 **P0 验收标准**：
 
-- [ ] `sub check`：与 subcheck 输出等价（订阅解析、多目标、排序、JSON/CSV）
-- [ ] `sub ping`：每节点输出 min/avg/max/jitter/loss；死节点 loss=100%
-- [ ] `sub speed`：输出下载 Mbps，量级与浏览器测速一致（±30%）
-- [ ] `route trace`：逐跳输出 IP/RTT/归属地，无需 root
-- [ ] `port probe`：TCP open/filtered 判定正确（对照 `nc -zv`）
-- [ ] `http inspect`：证书剩余有效期、签发者、TLS 版本、HTTP 版本正确（对照 `openssl s_client`）
-- [ ] `dns audit`：多 resolver 对比出解析差异；DoH 可用性判定
-- [ ] `ip show`：direct 与 `--via 节点` 分别输出国内外视角出口 IP、国家/城市/ISP
-- [ ] `sub rate`：HTML 单文件可离线打开，含评分表与 Top N
-- [ ] `serve`：局域网内浏览器可访问；地址清单可增删并一键检测（可达性、延迟、访问途径）；历史报告可浏览
-- [ ] 所有子命令支持 `--json`；核心逻辑有单测；保留本地端到端测试
-- [ ] `go vet` 干净；单二进制交叉编译可过（至少 darwin/arm64、linux/amd64）
+- [x] `sub check`：与 subcheck 输出等价（订阅解析、多目标、排序、JSON/CSV）
+- [x] `sub ping`：每节点输出 min/avg/max/jitter/loss；死节点 loss=100%
+- [x] `sub speed`：输出下载 Mbps，量级与浏览器测速一致（±30%）；`--upload` 同时测上传（收尾补全）
+- [x] `route trace`：逐跳输出 IP/RTT/归属地；Linux 免 root 完整逐跳，macOS 需 sudo（无权限自动降级 TCP TTL 扫描，见快速上手注记）
+- [x] `port probe`：TCP open/filtered 判定正确（对照 `nc -zv`）
+- [x] `http inspect`：证书剩余有效期、签发者、TLS 版本、HTTP 版本正确（对照 `openssl s_client`）
+- [x] `dns audit`：多 resolver 对比出解析差异；DoH 可用性判定
+- [x] `ip show`：direct 与 `--via 节点` 分别输出国内外视角出口 IP、国家/城市/ISP
+- [x] `sub rate`：HTML 单文件可离线打开，含评分表与 Top N
+- [x] `serve`：局域网内浏览器可访问；地址清单可增删并一键检测（可达性、延迟、访问途径）；历史报告可浏览
+- [x] 所有子命令支持 `--json`；核心逻辑有单测；保留本地端到端测试
+- [x] `go vet` 干净；单二进制交叉编译可过（darwin/arm64、linux/amd64、windows/amd64）
 
 ### P1（第二批，已实现）
 
@@ -233,4 +233,4 @@ IP 质量初版仅含归属地展示与 IDC/代理标记（ip-api 字段），�
 6. ~~go module 名~~：已定 `netscope`
 7. ~~`serve` 鉴权默认值~~：已定默认不鉴权，`--token` 可选
 8. ~~serve 交互式检测的进度推送~~：已定轮询（700ms），无 SSE/WebSocket
-9. 报告快照清理策略（按份数/天数保留）：P2 再做，当前目录会累积 `rate-时间戳.{html,json}`
+9. ~~报告快照清理策略~~：已实现 `report clean` + `sub rate` 保存后自动清理（keep/keepDays）

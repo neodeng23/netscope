@@ -5,11 +5,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -269,5 +271,31 @@ func TestScoreWeightsApplied(t *testing.T) {
 	s := string(body)
 	if !strings.Contains(s, "可用性(40)") || !strings.Contains(s, "IP质量/10") {
 		t.Fatalf("报告表头应使用自定义权重: 未命中")
+	}
+}
+
+// ---------- 上传测速 ----------
+
+func TestMeasureUpload(t *testing.T) {
+	var got int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		atomic.AddInt64(&got, n)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	old := speedUpEndpoint
+	speedUpEndpoint = srv.URL
+	defer func() { speedUpEndpoint = old }()
+
+	r := MeasureUpload(context.Background(), Direct, 1<<20, 3*time.Second)
+	if r.Err != "" {
+		t.Fatalf("upload err: %s", r.Err)
+	}
+	if r.UpMbps <= 0 || r.BytesRead == 0 {
+		t.Fatalf("upload result: %+v", r)
+	}
+	if got != r.BytesRead {
+		t.Fatalf("server got %d bytes, client sent %d", got, r.BytesRead)
 	}
 }

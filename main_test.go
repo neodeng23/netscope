@@ -304,7 +304,7 @@ func TestRenderReport(t *testing.T) {
 		{Node: "n1", Type: "ss", Alive: true, Total: 88, ScoreAvail: 20, ScoreLat: 25, ScoreSpeed: 28, ScoreIPQ: 15},
 		{Node: "n2", Type: "vmess", Alive: false, Total: 0},
 	}
-	body, err := RenderReport(nodes, 1)
+	body, err := RenderReport(nodes, 1, DefaultScoreWeights())
 	if err != nil {
 		t.Fatal(err)
 	}

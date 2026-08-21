@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -365,6 +366,65 @@ func checkTelegram(ctx context.Context, t Tunnel, timeout time.Duration) UnlockR
 	return r
 }
 
+// ---------- TikTok ----------
+// 参考逻辑（lmc999/TikTokCheck）：GET 首页，页面里能直接提取 "region":"XX" 即解锁；
+// 跟随重定向后才能提取到 => 疑似 IDC 出口（部分解锁）；完全无 region => 失败/受限。
+
+var tiktokRegionRe = regexp.MustCompile(`"region":"([A-Z]{2})"`)
+
+// tiktokHomeURL / spotifySignupURL 可在测试中替换为本地服务器。
+var (
+	tiktokHomeURL    = "https://www.tiktok.com/"
+	spotifySignupURL = "https://spclient.wg.spotify.com/signup/public/v1/account"
+)
+
+func checkTikTok(ctx context.Context, t Tunnel, timeout time.Duration) UnlockResult {
+	cl := unlockClient(t, timeout)
+	body, status, finalURL, err := unlockFetch(ctx, cl, tiktokHomeURL, nil)
+	if err != nil || status == 0 {
+		return UnlockResult{Service: "TikTok", Status: UnlockFailed, Note: shortErr(err.Error())}
+	}
+	if region := tiktokRegionRe.FindStringSubmatch(body); region != nil {
+		if finalURL == tiktokHomeURL || strings.TrimSuffix(finalURL, "/") == strings.TrimSuffix(tiktokHomeURL, "/") {
+			return UnlockResult{Service: "TikTok", Status: UnlockYes, Region: region[1]}
+		}
+		return UnlockResult{Service: "TikTok", Status: UnlockOnly, Region: region[1], Note: "疑似IDC出口"}
+	}
+	return UnlockResult{Service: "TikTok", Status: UnlockFailed, Note: fmt.Sprintf("首页无区域标记(HTTP %d)，疑似受限", status)}
+}
+
+// ---------- Spotify ----------
+// 参考逻辑（RegionRestrictionCheck）：POST 注册接口，返回 JSON 里
+// status==311 且 is_country_launched==true => 可注册（解锁，含地区）；
+// status 320/120 或 is_country_launched==false => 地区未开放。
+
+func checkSpotify(ctx context.Context, t Tunnel, timeout time.Duration) UnlockResult {
+	cl := unlockClient(t, timeout)
+	form := "birth_day=11&birth_month=11&birth_year=2000&collect_personal_info=undefined&creation_flow=&creation_point=https%3A%2F%2Fwww.spotify.com%2Fhk-en%2F&displayname=Gay%20Lord&gender=male&iagree=1&key=a1e486e2729f46d6bb368d6b2bcda326&platform=www&referrer=&send-email=0&thirdpartyemail=0&identifier_token=AgE6YTvEzkReHNfJpO114514"
+	body, _, err := unlockPost(ctx, cl, spotifySignupURL,
+		"application/x-www-form-urlencoded", form, map[string]string{"Accept-Language": "en"})
+	if err != nil {
+		return UnlockResult{Service: "Spotify", Status: UnlockFailed, Note: shortErr(err.Error())}
+	}
+	var v struct {
+		Status         int    `json:"status"`
+		Country        string `json:"country"`
+		IsCountryLaunched *bool `json:"is_country_launched"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil || v.Status == 0 {
+		return UnlockResult{Service: "Spotify", Status: UnlockFailed, Note: "响应无法解析"}
+	}
+	switch {
+	case v.Status == 311 && v.IsCountryLaunched != nil && *v.IsCountryLaunched:
+		return UnlockResult{Service: "Spotify", Status: UnlockYes, Region: v.Country}
+	case v.Status == 320 || v.Status == 120:
+		return UnlockResult{Service: "Spotify", Status: UnlockNo}
+	case v.IsCountryLaunched != nil && !*v.IsCountryLaunched:
+		return UnlockResult{Service: "Spotify", Status: UnlockNo}
+	}
+	return UnlockResult{Service: "Spotify", Status: UnlockFailed, Note: fmt.Sprintf("status=%d", v.Status)}
+}
+
 // ---------- 调度 ----------
 
 type unlockChecker struct {
@@ -380,6 +440,8 @@ var unlockCheckers = []unlockChecker{
 	{"Claude", checkClaude},
 	{"Gemini", checkGemini},
 	{"Telegram", checkTelegram},
+	{"TikTok", checkTikTok},
+	{"Spotify", checkSpotify},
 }
 
 // UnlockNode 对单个节点跑全部选中的服务检测（服务串行，避免触发风控）。
@@ -437,8 +499,7 @@ func cmdSubUnlock(ctx context.Context, args []string) int {
 	fs := newFlagSet("sub unlock")
 	sf := addSubFlags(fs, 5)
 	services := fs.String("services", "", "只检测指定服务（逗号分隔，子串匹配，如 Netflix,ChatGPT）")
-	timeoutFlag := secsDur{15 * time.Second}
-	fs.Var(&timeoutFlag, "timeout", "单项服务请求超时")
+	sf.timeout.Duration = 15 * time.Second // 单项服务默认 15s（比普通检测宽松）
 	jsonOut := fs.String("json", "", "JSON 输出路径（- 为 stdout）")
 	csvOut := fs.String("csv", "", "CSV 输出路径")
 	fs.Parse(args)
@@ -450,6 +511,8 @@ func cmdSubUnlock(ctx context.Context, args []string) int {
 				svcFilter = append(svcFilter, f)
 			}
 		}
+	} else if len(appConfig.Unlock.Services) > 0 {
+		svcFilter = appConfig.Unlock.Services // 配置文件里的默认服务过滤
 	}
 	// 输出列按选中的服务排
 	var cols []unlockChecker
@@ -467,7 +530,7 @@ func cmdSubUnlock(ctx context.Context, args []string) int {
 	for _, n := range nodes {
 		n := n
 		tasks = append(tasks, func(ctx context.Context) {
-			nu := UnlockNode(ctx, n, timeoutFlag.Duration, svcFilter)
+			nu := UnlockNode(ctx, n, sf.timeout.Duration, svcFilter)
 			mu.Lock()
 			results = append(results, nu)
 			mu.Unlock()

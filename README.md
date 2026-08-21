@@ -9,7 +9,7 @@
 - 输出：终端表格、JSON、CSV、**自包含 HTML 报告**（可分享）
 - Web 体检台（`serve`）：局域网内浏览器直接访问；地址清单（分组 / 导入导出）、单通道检测、**全节点对比**、评分趋势图（P1）
 
-> 状态：**P0、P1 已实现**。`go build -o netscope .` 出单二进制即用。
+> 状态：**P0、P1、P2 全部实现**。`go build -o netscope .` 出单二进制即用。
 >
 > **触发原则（已确认）**：所有检测都是一次性、由用户手动触发的（CLI 敲命令或网页点按钮）。
 > 不做长期驻留、定时巡检、自动循环与告警推送。
@@ -29,6 +29,9 @@ netscope ip show                                       # 国内外出口 IP 双�
 netscope dns audit github.com                          # 解析对比 + 污染检测 + EDNS 出口
 netscope route bloat                                   # bufferbloat：满载下载时的延迟变化
 netscope serve --sub "订阅链接"                         # Web 体检台，默认 0.0.0.0:8420，局域网可访问
+netscope sub unlock -sub "订阅链接" --services TikTok,Spotify
+netscope config init && netscope config show             # 生成/查看 YAML 配置预设
+netscope report clean --keep 30 --keep-days 60           # 清理报告快照
 ```
 
 > 注：`route trace` 完整逐跳（含中间路由 IP 与归属地）需要能收 ICMP 差错报文：Linux 免 root（UDP errqueue），
@@ -181,11 +184,23 @@ IP 质量初版仅含归属地展示与 IDC/代理标记（ip-api 字段），�
 - [x] `sub info`：本地文件与 HTTP 头两条路径验证（含毫秒时间戳兼容）
 - [x] `serve`：分组/导入导出/全节点任务/趋势接口有 API 端到端测试
 
-### P2（远期）
+### P2（第三批，已实现）
 
-- YAML 配置文件预设（目标列表、解锁项、评分权重持久化）
-- 报告快照清理策略（按份数/天数保留）
-- 更多 IP 质量数据源（接入 `IPQualitySource`）、解锁服务扩充（TikTok/Spotify 等，探测端点需先调研）
+| # | 模块 | 内容 | 状态 |
+|---|---|---|---|
+| 1 | YAML 配置预设 | `~/.netscope/config.yaml`（或 `--config` / `NETSCOPE_CONFIG`）：默认目标（sub check/rate）、默认解锁服务、评分权重、serve 监听/令牌/目录、快照清理策略；`config init` 生成模板、`config show` 查看生效值 | ✅ |
+| 2 | 快照清理 | `report clean`（--keep/--keep-days，默认读配置）；`sub rate` 保存后自动按策略清理，html+json 成对保留 | ✅ |
+| 3 | IP 数据源扩充 | `IPQualitySource` 接入 **ipwho.is** 作为 ip-api 的兜底源（限流/故障时切换；无代理标记时风险分按未知保守处理） | ✅ |
+| 4 | 解锁服务扩充 | **TikTok**（首页 region 提取，区分 IDC 疑似出口；端点取自 lmc999/TikTokCheck）、**Spotify**（注册接口 status/is_country_launched 判定，含地区）；本地端到端测试覆盖判定分支 | ✅ |
+| 5 | 评分权重可配 | `sub rate` 权重从配置读取，HTML 报告表头满分动态显示 | ✅ |
+
+**P2 验收补充**：
+
+- [x] `config init/show`：模板生成、部分权重缺项自动判无效回退默认
+- [x] `report clean`：按份数/天数清理，成对删除、不动无关文件（单测覆盖）
+- [x] ipwho.is：成功/失败响应解析（本地单测）；仅作兜底，ip-api 优先（保住 proxy/hosting 标记）
+- [x] TikTok/Spotify：本地服务器覆盖 解锁/未解锁/疑似 IDC/解析失败 分支；实网验证判定合理
+- [x] 修复 P1 遗留：`sub unlock` 的 `-timeout` 重复注册 panic
 
 > 原 P2 的 `sub watch`（长时稳定性）与「定时巡检 + webhook/邮件推送」**已移除**：按已确认的触发原则，
 > 所有检测一次性手动触发，不做长期/自动/定时形态。

@@ -37,6 +37,7 @@ type RateOptions struct {
 	SpeedDur    time.Duration
 	Timeout     time.Duration
 	Concurrency int
+	Weights     ScoreWeights // 评分权重（无效时用默认 20/30/30/20）
 }
 
 // RateNodes 对全部节点跑 check+ping+speed+ip 并评分。
@@ -87,7 +88,11 @@ func rateOne(ctx context.Context, n Tunnel, opt RateOptions) NodeScore {
 	}
 	ns.Check = first
 	ns.Alive = okN > 0
-	ns.ScoreAvail = 20 * float64(okN) / float64(len(targets))
+	w := opt.Weights
+	if !w.Valid() {
+		w = DefaultScoreWeights()
+	}
+	ns.ScoreAvail = w.Availability * float64(okN) / float64(len(targets))
 	if !ns.Alive {
 		return ns // 死节点跳过后续昂贵检测
 	}
@@ -110,7 +115,7 @@ func rateOne(ctx context.Context, n Tunnel, opt RateOptions) NodeScore {
 			if x < 0 {
 				x = 0
 			}
-			ns.ScoreLat = 30 * x
+			ns.ScoreLat = w.Latency * x
 		}
 	}
 	// 3) 速度
@@ -123,11 +128,11 @@ func rateOne(ctx context.Context, n Tunnel, opt RateOptions) NodeScore {
 		}
 		ns.ScoreSpeed = 30 * x
 	}
-	// 4) IP 质量：风险分折算（风险 0 满分 20，风险 100 为 0 分；未知给一半）
-	ns.ScoreIPQ = 10
+	// 4) IP 质量：风险分折算（风险 0 满分，风险 100 为 0 分；未知给一半）
+	ns.ScoreIPQ = w.IPQ / 2
 	if ns.IP != nil {
 		if risk := ns.IP.RiskScore(); risk >= 0 {
-			ns.ScoreIPQ = 20 - float64(risk)/5
+			ns.ScoreIPQ = w.IPQ * (1 - float64(risk)/100)
 		}
 	}
 	ns.Total = ns.ScoreAvail + ns.ScoreLat + ns.ScoreSpeed + ns.ScoreIPQ
@@ -180,7 +185,7 @@ var reportTpl = template.Must(template.New("report").Funcs(tplFuncs).Parse(`<!DO
 </head>
 <body><div class="wrap">
 <h1>🩺 netscope 综合体检报告</h1>
-<div class="sub">生成时间 {{.Time}} · 节点 {{.Total}} 个，可用 {{.Alive}} 个 · 评分 = 可用性(20) + 延迟(30) + 速度(30) + IP质量(20)</div>
+<div class="sub">生成时间 {{.Time}} · 节点 {{.Total}} 个，可用 {{.Alive}} 个 · 评分 = 可用性({{printf "%.0f" .WAvail}}) + 延迟({{printf "%.0f" .WLat}}) + 速度({{printf "%.0f" .WSpeed}}) + IP质量({{printf "%.0f" .WIPQ}})</div>
 
 {{if .Top}}
 <h2 style="font-size:16px;margin-bottom:10px">🏆 最优节点 Top {{len .Top}}</h2>
@@ -202,7 +207,7 @@ var reportTpl = template.Must(template.New("report").Funcs(tplFuncs).Parse(`<!DO
 
 <h2 style="font-size:16px;margin-bottom:10px">全部节点</h2>
 <table>
-<tr><th>#</th><th>节点</th><th>类型</th><th>状态</th><th>总分</th><th>可用性/20</th><th>延迟/30</th><th>速度/30</th><th>IP质量/20</th><th>延迟ms</th><th>速度Mbps</th><th>出口 / 归属地</th></tr>
+<tr><th>#</th><th>节点</th><th>类型</th><th>状态</th><th>总分</th><th>可用性/{{printf "%.0f" .WAvail}}</th><th>延迟/{{printf "%.0f" .WLat}}</th><th>速度/{{printf "%.0f" .WSpeed}}</th><th>IP质量/{{printf "%.0f" .WIPQ}}</th><th>延迟ms</th><th>速度Mbps</th><th>出口 / 归属地</th></tr>
 {{range $i, $n := .Nodes}}
 <tr>
   <td>{{add $i 1}}</td>
@@ -224,22 +229,33 @@ var reportTpl = template.Must(template.New("report").Funcs(tplFuncs).Parse(`<!DO
 </div></body></html>
 `))
 
-// RenderReport 生成自包含 HTML。
-func RenderReport(nodes []NodeScore, topN int) ([]byte, error) {
+// RenderReport 生成自包含 HTML。w 为评分权重（决定表头满分显示）。
+func RenderReport(nodes []NodeScore, topN int, w ScoreWeights) ([]byte, error) {
+	if !w.Valid() {
+		w = DefaultScoreWeights()
+	}
 	if topN > len(nodes) {
 		topN = len(nodes)
 	}
 	type page struct {
-		Time  string
-		Total int
-		Alive int
-		Top   []NodeScore
-		Nodes []NodeScore
+		Time   string
+		Total  int
+		Alive  int
+		Top    []NodeScore
+		Nodes  []NodeScore
+		WAvail float64
+		WLat   float64
+		WSpeed float64
+		WIPQ   float64
 	}
 	p := page{
-		Time:  time.Now().Format("2006-01-02 15:04:05"),
-		Total: len(nodes),
-		Nodes: nodes,
+		Time:   time.Now().Format("2006-01-02 15:04:05"),
+		Total:  len(nodes),
+		Nodes:  nodes,
+		WAvail: w.Availability,
+		WLat:   w.Latency,
+		WSpeed: w.Speed,
+		WIPQ:   w.IPQ,
 	}
 	for _, n := range nodes {
 		if n.Alive {
@@ -264,14 +280,14 @@ func RenderReport(nodes []NodeScore, topN int) ([]byte, error) {
 }
 
 // SaveReport 把 HTML 报告与 JSON 快照写入报告目录，返回路径。
-func SaveReport(dir string, nodes []NodeScore, topN int) (htmlPath, jsonPath string, err error) {
+func SaveReport(dir string, nodes []NodeScore, topN int, w ScoreWeights) (htmlPath, jsonPath string, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", err
 	}
 	stamp := time.Now().Format("20060102-150405")
 	htmlPath = filepath.Join(dir, "rate-"+stamp+".html")
 	jsonPath = filepath.Join(dir, "rate-"+stamp+".json")
-	body, err := RenderReport(nodes, topN)
+	body, err := RenderReport(nodes, topN, w)
 	if err != nil {
 		return "", "", err
 	}
@@ -279,10 +295,15 @@ func SaveReport(dir string, nodes []NodeScore, topN int) (htmlPath, jsonPath str
 		return "", "", err
 	}
 	if err := WriteJSON(jsonPath, map[string]any{
-		"time":  time.Now().Format(time.RFC3339),
-		"nodes": nodes,
+		"time":    time.Now().Format(time.RFC3339),
+		"weights": w,
+		"nodes":   nodes,
 	}); err != nil {
 		return "", "", err
+	}
+	// 自动清理（配置 reports.keep / reports.keepDays，0 不限）
+	if removed, err := cleanReports(dir, appConfig.Reports.Keep, appConfig.Reports.KeepDays); err == nil && len(removed) > 0 {
+		Progress("已按策略清理 %d 个旧快照文件\n", len(removed))
 	}
 	return htmlPath, jsonPath, nil
 }
@@ -304,13 +325,18 @@ func cmdSubRate(ctx context.Context, args []string) int {
 	fs.Parse(args)
 
 	nodes := sf.load(ctx)
+	rateTargets := *targets
+	if len(rateTargets) == 0 {
+		rateTargets = appConfig.Targets // 配置文件里的默认目标
+	}
 	opt := RateOptions{
-		Targets:     *targets,
+		Targets:     rateTargets,
 		PingCount:   *pingN,
 		SpeedSize:   *size,
 		SpeedDur:    durFlag.Duration,
 		Timeout:     sf.timeout.Duration,
 		Concurrency: *sf.conc,
+		Weights:     appConfig.Score,
 	}
 	done := 0
 	scores := RateNodes(ctx, nodes, opt, func(ns NodeScore) {
@@ -352,7 +378,7 @@ func cmdSubRate(ctx context.Context, args []string) int {
 			fmt.Printf("  %d. %s（%.0f 分）\n", i+1, aliveScores[i].Node, aliveScores[i].Total)
 		}
 	}
-	htmlPath, jsonPath, err := SaveReport(*reportDir, scores, topN)
+	htmlPath, jsonPath, err := SaveReport(*reportDir, scores, topN, appConfig.Score)
 	if err != nil {
 		Progress("保存报告失败: %v\n", err)
 	} else {

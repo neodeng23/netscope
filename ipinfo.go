@@ -116,7 +116,69 @@ type IPQualitySource interface {
 }
 
 // ipQualitySources 按序尝试，第一个成功即用。
-var ipQualitySources = []IPQualitySource{ipAPISource{}}
+// ipwho.is 作为 ip-api 的兜底（ip-api 免费版限 45 次/分）：
+// 注意 ipwho.is 无 proxy/hosting/mobile 标记，兜底命中时风险分按"未知"处理更保守。
+var ipQualitySources = []IPQualitySource{
+	ipAPISource{},
+	ipwhoSource{baseURL: "https://ipwho.is"},
+}
+
+type ipwhoSource struct{ baseURL string }
+
+func (s ipwhoSource) Name() string { return "ipwho.is" }
+
+func (s ipwhoSource) Lookup(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
+	u := s.baseURL + "/"
+	if ip != "" {
+		u += ip
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := tunnelHTTPClient(t, 10*time.Second).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		IP      string `json:"ip"`
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Country string `json:"country"`
+		Code    string `json:"country_code"`
+		Region  string `json:"region"`
+		City    string `json:"city"`
+		Connection struct {
+			ASN int    `json:"asn"`
+			Org string `json:"org"`
+			ISP string `json:"isp"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, err
+	}
+	if !v.Success {
+		return nil, fmt.Errorf("ipwho.is: %s", orDefault(v.Message, "failed"))
+	}
+	country := v.Country
+	if v.Code != "" {
+		country = v.Country + "(" + v.Code + ")"
+	}
+	return &IPInfo{
+		Query:      v.IP,
+		Country:    country,
+		RegionName: v.Region,
+		City:       v.City,
+		ISP:        orDefault(v.Connection.ISP, v.Connection.Org),
+		AS:         fmt.Sprintf("AS%d %s", v.Connection.ASN, v.Connection.Org),
+		Status:     "success",
+	}, nil
+}
 
 type ipAPISource struct{}
 

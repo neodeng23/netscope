@@ -483,11 +483,11 @@ func buildMux(d serveDeps) *http.ServeMux {
 
 func cmdServe(ctx context.Context, args []string) int {
 	fs := newFlagSet("serve")
-	listen := fs.String("listen", "0.0.0.0:8420", "监听地址")
+	listen := fs.String("listen", orDefault(appConfig.Serve.Listen, "0.0.0.0:8420"), "监听地址")
 	sub := fs.String("sub", "", "可选：订阅，加载后网页上可选择经节点检测")
-	token := fs.String("token", "", "可选：访问令牌（为空则不鉴权）")
-	reportDir := fs.String("report-dir", defaultReportDir(), "报告目录")
-	targetsPath := fs.String("targets", defaultTargetsPath(), "地址清单存储路径")
+	token := fs.String("token", appConfig.Serve.Token, "可选：访问令牌（为空则不鉴权）")
+	reportDir := fs.String("report-dir", orDefault(appConfig.Serve.ReportDir, defaultReportDir()), "报告目录")
+	targetsPath := fs.String("targets", orDefault(appConfig.Serve.TargetsFile, defaultTargetsPath()), "地址清单存储路径")
 	conc := fs.Int("c", 8, "检测并发数")
 	timeoutFlag := secsDur{12 * time.Second}
 	fs.Var(&timeoutFlag, "timeout", "单目标检测超时")

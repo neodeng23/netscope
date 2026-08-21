@@ -32,9 +32,12 @@ const usageText = `netscope - 一站式网络体检工具
   netscope dns audit   <域名> [--via 节点]                 多 resolver 对比 + 污染检测 + EDNS 出口
   netscope ip show     [--via 节点]                        国内外出口 IP 双视角 + IP 风险分
   netscope report diff [旧.json 新.json]                   两次评分快照对比（默认取最新两个）
+  netscope report clean [--keep N --keep-days D]          清理报告快照（默认读配置）
   netscope serve       [--listen 0.0.0.0:8420] [--sub 订阅] Web 体检台（局域网）
+  netscope config init|show                               生成/查看 YAML 配置预设
 
-通用: --json 路径 输出 JSON（"-" 为 stdout）；--csv 文件；--via 支持 节点名 或 序号(1起)
+通用: --config 路径 或 NETSCOPE_CONFIG 环境变量指定配置；--json 路径 输出 JSON（"-" 为 stdout）；
+      --csv 文件；--via 支持 节点名 或 序号(1起)
 所有检测均为一次性手动触发，不驻留、不定时、不自动循环。
 `
 
@@ -95,6 +98,9 @@ func parseMixed(fs *flag.FlagSet, args []string) []string {
 	return pos
 }
 
+// globalConfigPath 指向实际使用的配置文件（config init/show 用）。
+var globalConfigPath = defaultConfigPath()
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -104,10 +110,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	group, cmd := os.Args[1], ""
-	args := os.Args[2:]
+	// 全局 --config（须在子命令之前）与环境变量
+	args := os.Args[1:]
+	if len(args) >= 2 && (args[0] == "--config" || args[0] == "-config") {
+		globalConfigPath = args[1]
+		args = args[2:]
+	} else if strings.HasPrefix(args[0], "--config=") {
+		globalConfigPath = strings.TrimPrefix(args[0], "--config=")
+		args = args[1:]
+	} else if v := os.Getenv("NETSCOPE_CONFIG"); v != "" {
+		globalConfigPath = v
+	}
+	if cfg, err := loadConfig(globalConfigPath); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: 配置加载失败：%v（使用默认值）\n", err)
+	} else {
+		appConfig = cfg
+	}
+
+	group, cmd := args[0], ""
+	args = args[1:]
 	switch group {
-	case "sub", "route", "port", "http", "dns", "ip", "report":
+	case "sub", "route", "port", "http", "dns", "ip", "report", "config":
 		if len(args) == 0 {
 			usage()
 			os.Exit(2)
@@ -145,10 +168,16 @@ func main() {
 		code = cmdIPShow(ctx, args)
 	case "report diff":
 		code = cmdReportDiff(ctx, args)
+	case "report clean":
+		code = cmdReportClean(ctx, args)
 	case "serve":
 		code = cmdServe(ctx, args)
+	case "config init":
+		code = cmdConfigInit(args)
+	case "config show":
+		code = cmdConfigShow(args)
 	case "version":
-		fmt.Println("netscope 0.2.0 (P1)")
+		fmt.Println("netscope 0.3.0 (P2)")
 	default:
 		usage()
 		os.Exit(2)
@@ -217,6 +246,9 @@ func cmdSubCheck(ctx context.Context, args []string) int {
 	fs.Parse(args)
 
 	tg := *targets
+	if len(tg) == 0 {
+		tg = appConfig.Targets // 配置文件里的默认目标
+	}
 	if len(tg) == 0 {
 		tg = []string{"https://www.gstatic.com/generate_204"}
 	}

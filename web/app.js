@@ -1,7 +1,7 @@
 // netscope 体检台前端（无构建链，原生 JS）
 // 所有检测都由按钮触发：单通道检测 / 全节点对比 / 趋势图均一次点击一次执行。
 const $ = (s) => document.querySelector(s);
-const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null, matrixSort: 'pass', lastJob: null };
+const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null, matrixSort: 'pass', lastJob: null, lastJobId: null, matrixOrder: null };
 
 // ---------- API ----------
 
@@ -75,6 +75,10 @@ function isAllNodeJob(job) {
 }
 
 function renderResults(job) {
+  if (job.id !== state.lastJobId) {
+    state.lastJobId = job.id;
+    state.matrixOrder = null; // 新任务:行序重新锁定
+  }
   state.lastJob = job;
   if (isAllNodeJob(job)) { renderMatrix(job); return; }
   $('#matrix-box').hidden = true;
@@ -274,7 +278,7 @@ function matrixCell(r) {
   return `<td class="m-bad" title="${tip}">❌</td>`;
 }
 
-function renderMatrix(job) {
+function renderMatrix(job, forceSort = false) {
   $('#results').hidden = true;
   $('#result-tip').hidden = true;
   const box = $('#matrix-box');
@@ -296,7 +300,7 @@ function renderMatrix(job) {
     }
   }
 
-  const nodeNames = [...rows.keys()];
+  let nodeNames = [...rows.keys()];
   const sorter = {
     pass: (a, b) => {
       const ra = rows.get(a), rb = rows.get(b);
@@ -307,7 +311,21 @@ function renderMatrix(job) {
       return (ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9);
     },
   };
-  nodeNames.sort(sorter[state.matrixSort] || sorter.pass);
+  // 行序稳定性:进行中锁定首次出现的顺序(订阅顺序),避免结果陆续到达时节点行上下跳;
+  // 任务完成或用户点击排序时才重排。
+  const orderValid = state.matrixOrder && state.matrixOrder.length === nodeNames.length
+    && state.matrixOrder.every((n) => rows.has(n));
+  if (forceSort || job.finished || !orderValid) {
+    const base = orderValid ? state.matrixOrder : nodeNames;
+    if (forceSort || job.finished) {
+      nodeNames = base.slice().sort(sorter[state.matrixSort] || sorter.pass);
+    } else {
+      nodeNames = base;
+    }
+    state.matrixOrder = nodeNames.slice();
+  } else {
+    nodeNames = state.matrixOrder;
+  }
 
   const shortUrl = (u) => u.replace(/^https?:\/\//, '').replace(/\/$/, '');
   const head = urls.map((u) => `<th class="m-url" title="${escapeHTML(u)}">${escapeHTML(shortUrl(u))}</th>`).join('');
@@ -525,5 +543,5 @@ $('#btn-local').addEventListener('click', runLocal);
 $('#sort-pass').addEventListener('click', () => { state.matrixSort = 'pass'; rerenderMatrix(); });
 $('#sort-latency').addEventListener('click', () => { state.matrixSort = 'latency'; rerenderMatrix(); });
 function rerenderMatrix() {
-  if (state.lastJob && isAllNodeJob(state.lastJob)) renderMatrix(state.lastJob);
+  if (state.lastJob && isAllNodeJob(state.lastJob)) renderMatrix(state.lastJob, true);
 }

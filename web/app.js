@@ -493,16 +493,26 @@ function renderGameJob(job) {
   for (const platform of ['steam', 'psn']) {
     const items = byPlatform[platform];
     const rows = items.map((it) => ({ node: it.node, r: it.result, ...gameRowCells(platform, it.result, it.node) }));
-    let ordered;
-    if (!job.finished) {
-      // 进行中:锁定首帧顺序(订阅顺序),结果填入各自行,行不动
-      if (!gameAll.order) gameAll.order = job.items.map((it) => it.node);
-      const rowMap = new Map(rows.map((r) => [r.node, r]));
-      ordered = gameAll.order.map((n) => rowMap.get(n)).filter(Boolean);
+    const rowByNode = new Map(rows.map((r) => [r.node, r]));
+    // 行序与矩阵视图同一套逻辑:节点序去重后首帧锁定;完成时按 全通优先+平均延迟 排序一次
+    let nodeNames = [...new Set(items.map((it) => it.node))];
+    const orderValid = gameAll.order && gameAll.order.length === nodeNames.length
+      && gameAll.order.every((n) => rowByNode.has(n));
+    if (job.finished || !orderValid) {
+      const base = orderValid ? gameAll.order : nodeNames;
+      if (job.finished) {
+        nodeNames = base.slice().sort((a, b) => {
+          const ra = rowByNode.get(a), rb = rowByNode.get(b);
+          return (Number(rb.ok) - Number(ra.ok)) || ((ra.ms ?? 1e9) - (rb.ms ?? 1e9));
+        });
+      } else {
+        nodeNames = base;
+      }
+      gameAll.order = nodeNames.slice();
     } else {
-      // 完成:全通优先 -> 平均延迟升序
-      ordered = rows.slice().sort((a, b) => (Number(b.ok) - Number(a.ok)) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
+      nodeNames = gameAll.order;
     }
+    const ordered = nodeNames.map((n) => rowByNode.get(n)).filter(Boolean);
     const head = platform === 'steam'
       ? '<tr><th>节点</th><th>商店</th><th>社区</th><th>货币区</th><th>延迟</th></tr>'
       : '<tr><th>节点</th><th>商店</th><th>账户</th><th>官网</th><th>区域</th><th>延迟</th></tr>';

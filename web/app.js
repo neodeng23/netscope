@@ -477,9 +477,15 @@ function gameRowCells(platform, r, node) {
   };
 }
 
-let gameAllState = { id: null, order: null, finished: false };
+// 游戏全节点任务状态:polling 独立于普通检测,避免互相覆盖导致渲染交错
+let gameAll = { id: null, order: null, polling: null };
 
 function renderGameJob(job) {
+  // 新任务:重置锁序(首帧捕获完整节点顺序,任务创建即含全部节点)
+  if (gameAll.id !== job.id) {
+    gameAll.id = job.id;
+    gameAll.order = null;
+  }
   const byPlatform = { steam: [], psn: [] };
   for (const it of job.items) {
     byPlatform[it.platform === 'steam' ? 'steam' : 'psn'].push(it);
@@ -487,52 +493,57 @@ function renderGameJob(job) {
   for (const platform of ['steam', 'psn']) {
     const items = byPlatform[platform];
     const rows = items.map((it) => ({ node: it.node, r: it.result, ...gameRowCells(platform, it.result, it.node) }));
-    // 行序:进行中锁定出现顺序;完成后 全通优先->平均延迟升序
-    let ordered = rows;
-    if (gameAllState.id === job.id && gameAllState.order && !job.finished) {
-      const ord = gameAllState.order;
-      ordered = ord.map((n) => rows.find((r) => r.node === n)).filter(Boolean);
-    } else if (job.finished) {
-      ordered = rows.slice().sort((a, b) => (b.ok - a.ok) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
+    let ordered;
+    if (!job.finished) {
+      // 进行中:锁定首帧顺序(订阅顺序),结果填入各自行,行不动
+      if (!gameAll.order) gameAll.order = job.items.map((it) => it.node);
+      const rowMap = new Map(rows.map((r) => [r.node, r]));
+      ordered = gameAll.order.map((n) => rowMap.get(n)).filter(Boolean);
+    } else {
+      // 完成:全通优先 -> 平均延迟升序
+      ordered = rows.slice().sort((a, b) => (Number(b.ok) - Number(a.ok)) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
     }
-    if (gameAllState.id !== job.id) gameAllState.order = items.map((it) => it.node);
     const head = platform === 'steam'
       ? '<tr><th>节点</th><th>商店</th><th>社区</th><th>货币区</th><th>延迟</th></tr>'
       : '<tr><th>节点</th><th>商店</th><th>账户</th><th>官网</th><th>区域</th><th>延迟</th></tr>';
     const body = ordered.map((r) => `<tr>${r.cells}</tr>`).join('');
     const done = items.filter((it) => it.result).length;
     const full = rows.filter((r) => r.ok).length;
+    const orderNote = job.finished ? '已按 全通优先·平均延迟升序 排列' : '行序检测中锁定';
     $(`#${platform}-box`).innerHTML = `
-      <div class="game-summary">已完成 ${done}/${items.length} · 全通 ${full} 个${job.finished ? '' : ' · 行序检测中锁定'}</div>
+      <div class="game-summary">已完成 ${done}/${items.length} · 全通 ${full} 个 · ${orderNote}</div>
       <div class="game-scroll"><table class="game-grid-tbl"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
   }
   $('#game-progress').textContent = job.finished ? `完成 ${job.done}/${job.total}` : `${job.done}/${job.total}`;
-  if (job.finished && state.polling) { clearInterval(state.polling); state.polling = null; }
-  if (gameAllState.id !== job.id) gameAllState.id = job.id;
 }
 
 async function runGameAll() {
   const btn = $('#btn-game-all');
   btn.disabled = true;
   $('#game-progress').textContent = '启动中…';
-  gameAllState = { id: null, order: null, finished: false };
+  if (gameAll.polling) { clearInterval(gameAll.polling); gameAll.polling = null; }
   try {
     const { id } = await api('/api/game/all', { method: 'POST' });
-    gameAllState.id = id;
-    state.polling = setInterval(async () => {
-      const job = await api('/api/jobs/' + id);
+    gameAll = { id, order: null, polling: null };
+    gameAll.polling = setInterval(async () => {
+      let job;
+      try {
+        job = await api('/api/jobs/' + id);
+      } catch (e) {
+        return; // 网络抖动:下个周期重试
+      }
       renderGameJob(job);
+      if (job.finished) {
+        clearInterval(gameAll.polling);
+        gameAll.polling = null;
+        btn.disabled = false;
+      }
     }, 900);
   } catch (e) {
     alert('发起失败：' + e.message);
     $('#game-progress').textContent = '';
     btn.disabled = false;
-    return;
   }
-  // 轮询开始即可再点(检测中重复点击由 alert 提示)——完成后恢复按钮
-  const check = setInterval(() => {
-    if (!state.polling) { clearInterval(check); btn.disabled = false; }
-  }, 800);
 }
 
 // ---------- 结果说明 ----------

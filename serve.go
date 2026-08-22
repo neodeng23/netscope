@@ -273,15 +273,14 @@ func (jm *jobManager) Get(id string) *checkJob {
 // ---------- Web 服务 ----------
 
 type serveDeps struct {
-	targets   *targetStore
-	subs      *subStore
-	jobs      *jobManager
-	reportDir string
-	token     string
-	timeout   time.Duration
-	conc      int
-	nodes     func() []Tunnel
-	reload    func() // 订阅变更后触发重新加载
+	targets *targetStore
+	subs    *subStore
+	jobs    *jobManager
+	token   string
+	timeout time.Duration
+	conc    int
+	nodes   func() []Tunnel
+	reload  func() // 订阅变更后触发重新加载
 }
 
 func buildMux(d serveDeps) *http.ServeMux {
@@ -345,13 +344,11 @@ func buildMux(d serveDeps) *http.ServeMux {
 		for _, n := range d.nodes() {
 			nodeList = append(nodeList, map[string]string{"name": n.Name(), "type": n.Type(), "server": n.Server()})
 		}
-		reports, _ := listReports(d.reportDir)
 		writeJSON(w, map[string]any{
 			"targets": d.targets.All(),
 			"subs":    d.subs.All(),
 			"groups":  d.targets.Groups(),
 			"nodes":   nodeList,
-			"reports": reports,
 		})
 	})))
 
@@ -497,6 +494,15 @@ func buildMux(d serveDeps) *http.ServeMux {
 		writeJSON(w, map[string]string{"id": id})
 	})))
 
+	// /api/local：本机网络体检（与订阅无关，直连双视角）
+	mux.Handle("/api/local", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, RunLocalCheck(context.Background()))
+	})))
+
 	mux.Handle("/api/jobs/", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
 		j := d.jobs.Get(id)
@@ -507,20 +513,6 @@ func buildMux(d serveDeps) *http.ServeMux {
 		writeJSON(w, j)
 	})))
 
-	// /api/trend：汇总报告目录里的 rate-*.json 快照，供前端画趋势图
-	mux.Handle("/api/trend", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, buildTrend(d.reportDir))
-	})))
-
-	mux.Handle("/reports/", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := filepath.Base(r.URL.Path)
-		if name == "" || strings.Contains(name, "..") || !strings.HasSuffix(name, ".html") {
-			http.NotFound(w, r)
-			return
-		}
-		http.ServeFile(w, r, filepath.Join(d.reportDir, name))
-	})))
-
 	return mux
 }
 
@@ -529,7 +521,6 @@ func cmdServe(ctx context.Context, args []string) int {
 	listen := fs.String("listen", orDefault(appConfig.Serve.Listen, "0.0.0.0:8420"), "监听地址")
 	sub := fs.String("sub", "", "可选：订阅（写入订阅清单，网页上可管理多个）")
 	token := fs.String("token", appConfig.Serve.Token, "可选：访问令牌（为空则不鉴权）")
-	reportDir := fs.String("report-dir", orDefault(appConfig.Serve.ReportDir, defaultReportDir()), "报告目录")
 	targetsPath := fs.String("targets", orDefault(appConfig.Serve.TargetsFile, defaultTargetsPath()), "地址清单存储路径")
 	conc := fs.Int("c", 8, "检测并发数")
 	timeoutFlag := secsDur{12 * time.Second}
@@ -544,8 +535,6 @@ func cmdServe(ctx context.Context, args []string) int {
 	if err != nil {
 		fatalf("读取订阅清单失败: %v", err)
 	}
-	_ = os.MkdirAll(*reportDir, 0o755)
-
 	// --sub 作为初始订阅写入清单（按 URL 去重）
 	if *sub != "" {
 		if _, added, err := subs.Add(*sub, ""); err != nil {
@@ -562,7 +551,6 @@ func cmdServe(ctx context.Context, args []string) int {
 		targets:   targets,
 		subs:      subs,
 		jobs:      newJobManager(),
-		reportDir: *reportDir,
 		token:     *token,
 		timeout:   timeoutFlag.Duration,
 		conc:      *conc,
@@ -579,7 +567,7 @@ func cmdServe(ctx context.Context, args []string) int {
 	for _, u := range listenURLs(ln, *token) {
 		fmt.Printf("   %s\n", u)
 	}
-	fmt.Printf("   报告目录: %s\n   地址清单: %s\n   订阅清单: %s（共 %d 条）\n   Ctrl-C 停止\n", *reportDir, *targetsPath, subs.path, len(subs.All()))
+	fmt.Printf("   地址清单: %s\n   订阅清单: %s（共 %d 条）\n   Ctrl-C 停止\n", *targetsPath, subs.path, len(subs.All()))
 	go func() {
 		<-ctx.Done()
 		shCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -630,74 +618,7 @@ func localIPs() ([]string, error) {
 	return out, nil
 }
 
-func listReports(dir string) ([]map[string]any, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []map[string]any
-	for _, e := range entries {
-		if e.IsDir() || (!strings.HasSuffix(e.Name(), ".html") && !strings.HasSuffix(e.Name(), ".json")) {
-			continue
-		}
-		info, _ := e.Info()
-		out = append(out, map[string]any{
-			"name":  e.Name(),
-			"size":  info.Size(),
-			"mtime": info.ModTime().Format("2006-01-02 15:04"),
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i]["mtime"].(string) > out[j]["mtime"].(string) })
-	return out, nil
-}
 
-// trendNode 是一个节点在单次快照中的关键指标。
-type trendNode struct {
-	Node     string  `json:"node"`
-	Total    float64 `json:"total"`
-	Alive    bool    `json:"alive"`
-	AvgMs    float64 `json:"avgMs,omitempty"`
-	DownMbps float64 `json:"downMbps,omitempty"`
-}
-
-// trendSnapshot 是一次快照的全部节点指标。
-type trendSnapshot struct {
-	Time  string      `json:"time"` // 文件名（含时间戳）
-	Label string      `json:"label"`
-	Nodes []trendNode `json:"nodes"`
-}
-
-// buildTrend 按时间顺序汇总报告目录里的 rate-*.json。
-func buildTrend(dir string) []trendSnapshot {
-	paths, err := listSnapshots(dir)
-	if err != nil {
-		return nil
-	}
-	var out []trendSnapshot
-	// listSnapshots 返回新->旧，趋势图需要旧->新
-	for i := len(paths) - 1; i >= 0; i-- {
-		s, err := loadSnapshot(paths[i])
-		if err != nil {
-			continue
-		}
-		ts := trendSnapshot{Time: filepath.Base(paths[i]), Label: s.Time}
-		if ts.Label == "" {
-			ts.Label = ts.Time
-		}
-		for _, n := range s.Nodes {
-			tn := trendNode{Node: n.Node, Total: n.Total, Alive: n.Alive}
-			if n.Ping != nil && n.Ping.Recv > 0 {
-				tn.AvgMs = n.Ping.AvgMs
-			}
-			if n.Speed != nil && n.Speed.Err == "" {
-				tn.DownMbps = n.Speed.DownMbps
-			}
-			ts.Nodes = append(ts.Nodes, tn)
-		}
-		out = append(out, ts)
-	}
-	return out
-}
 
 func defaultTargetsPath() string {
 	home, _ := os.UserHomeDir()

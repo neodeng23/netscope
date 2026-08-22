@@ -72,25 +72,14 @@
   </section>
 
   <section class="card">
-    <h2>📈 评分趋势
+    <h2>🖥 本机网络体检
       <span class="spacer"></span>
-      <label class="mini">节点
-        <select id="trend-node"><option value="">选择节点</option></select>
-      </label>
-      <button id="btn-trend" class="mini-btn">画图</button>
+      <span id="local-progress" class="progress"></span>
+      <button id="btn-local" class="mini-btn">▶ 开始体检</button>
     </h2>
-    <div id="trend-box" class="trend-box">
-      <div class="tip">对同一订阅多次跑 <code>netscope sub rate</code> 后，这里可以看单个节点评分随时间的变化（每次手动触发）</div>
+    <div id="local-box">
+      <div class="tip">本机直连视角体检（与订阅无关）：国内外出口 IP 与归属地、基准延迟与丢包、站点可达性、DNS 污染检测、出口一致性</div>
     </div>
-  </section>
-
-  <section class="card">
-    <h2>📄 历史报告</h2>
-    <table id="reports" class="grid">
-      <thead><tr><th>文件</th><th>时间</th><th>大小</th><th class="w-op">操作</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div id="report-tip" class="tip" hidden>暂无报告，跑一次 <code>netscope sub rate</code> 试试</div>
   </section>
 </main>
 

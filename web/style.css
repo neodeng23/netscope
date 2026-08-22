@@ -83,3 +83,14 @@ a:hover { text-decoration: underline; }
 .w-nodes { width: 70px; }
 .sub-cell { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub-cell .sub-note { color: var(--sub); font-size: 12px; margin-left: 6px; }
+
+/* 本机网络体检 */
+.local-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+@media (max-width: 760px) { .local-grid { grid-template-columns: 1fr; } }
+.local-col { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.local-col h3 { font-size: 14px; margin-bottom: 8px; }
+.local-col .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 0; }
+.local-col .kv span { color: var(--sub); flex: none; }
+.local-col .kv b { font-weight: 500; word-break: break-all; text-align: right; }
+.local-col table { margin-top: 8px; }
+.kv-line { font-size: 13px; padding: 6px 2px; color: var(--ink); }

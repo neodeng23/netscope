@@ -226,7 +226,7 @@ func (n namedTunnel) ListenPacket(ctx context.Context, addr string) (net.PacketC
 	return lc.ListenPacket(ctx, "udp", ":0")
 }
 
-func TestServeAPIGroupsAndTrend(t *testing.T) {
+func TestServeAPIGroups(t *testing.T) {
 	dir := t.TempDir()
 	ts, err := loadTargets(dir + "/targets.json")
 	if err != nil {
@@ -235,7 +235,6 @@ func TestServeAPIGroupsAndTrend(t *testing.T) {
 	srv := httptest.NewServer(buildMux(serveDeps{
 		targets:   ts,
 		jobs:      newJobManager(),
-		reportDir: dir,
 		timeout:   2 * time.Second,
 		conc:      2,
 		nodes:     func() []Tunnel { return []Tunnel{Direct, namedTunnel{"节点甲"}} },
@@ -334,10 +333,4 @@ func TestServeAPIGroupsAndTrend(t *testing.T) {
 		t.Fatalf("bad export: %+v", exported)
 	}
 
-	// 趋势（无快照时应返回 null 而不是 500）
-	resp, _ = http.Get(srv.URL + "/api/trend")
-	if resp.StatusCode != 200 {
-		t.Fatalf("trend status: %d", resp.StatusCode)
-	}
-	resp.Body.Close()
 }

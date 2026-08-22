@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -319,7 +320,6 @@ func TestServeSubsAPI(t *testing.T) {
 		targets:   targets,
 		subs:      subs,
 		jobs:      newJobManager(),
-		reportDir: dir,
 		timeout:   2 * time.Second,
 		conc:      2,
 		nodes:     loader.Get,
@@ -383,5 +383,86 @@ func TestServeSubsAPI(t *testing.T) {
 	waitFor(func(s map[string]any) bool { return len(s["nodes"].([]any)) == 0 })
 	if len(subs.All()) != 0 {
 		t.Fatalf("删除后清单应为空: %+v", subs.All())
+	}
+}
+
+// ---------- 本机网络体检 ----------
+
+func TestIPSetEqual(t *testing.T) {
+	cases := []struct {
+		a, b []string
+		want bool
+	}{
+		{[]string{"1.1.1.1"}, []string{"1.1.1.1"}, true},
+		{[]string{"1.1.1.1", "2.2.2.2"}, []string{"2.2.2.2", "1.1.1.1"}, true},
+		{[]string{"1.1.1.1"}, []string{"5.6.7.8"}, false},
+		{[]string{"1.1.1.1"}, []string{"1.1.1.1", "2.2.2.2"}, false},
+		{nil, nil, true},
+	}
+	for i, c := range cases {
+		if got := ipSetEqual(c.a, c.b); got != c.want {
+			t.Fatalf("case %d: %v", i, got)
+		}
+	}
+}
+
+func TestCheckSites(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	dead := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	old := localCNSites
+	localCNSites = []struct{ Name, URL string }{
+		{"好站", ok.URL},
+		{"坏站", fmt.Sprintf("http://127.0.0.1:%d/", dead)},
+	}
+	defer func() { localCNSites = old }()
+
+	out := checkSites(context.Background(), localCNSites)
+	if len(out) != 2 {
+		t.Fatalf("sites: %+v", out)
+	}
+	byName := map[string]SiteCheck{}
+	for _, s := range out {
+		byName[s.Name] = s
+	}
+	if !byName["好站"].OK || byName["好站"].Status != 200 {
+		t.Fatalf("好站: %+v", byName["好站"])
+	}
+	if byName["坏站"].OK || byName["坏站"].Err == "" {
+		t.Fatalf("坏站应失败: %+v", byName["坏站"])
+	}
+}
+
+func TestLocalCheckAPI(t *testing.T) {
+	// 注入本地站点避免外网依赖;出口 IP/DNS 部分允许失败,只验形状
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	oldCN, oldGL := localCNSites, localGlobalSites
+	localCNSites = []struct{ Name, URL string }{{"本地好站", ok.URL}}
+	localGlobalSites = []struct{ Name, URL string }{{"本地好站2", ok.URL}}
+	defer func() { localCNSites, localGlobalSites = oldCN, oldGL }()
+
+	targets, _ := loadTargets(t.TempDir() + "/targets.json")
+	srv := httptest.NewServer(buildMux(serveDeps{targets: targets, jobs: newJobManager(), timeout: 2 * time.Second, conc: 2}))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/local", "application/json", nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("local: %v %v", err, resp)
+	}
+	var r LocalCheckResult
+	json.NewDecoder(resp.Body).Decode(&r)
+	resp.Body.Close()
+	if r.Domestic == nil || r.Foreign == nil {
+		t.Fatalf("perspectives nil: %+v", r)
+	}
+	if len(r.Domestic.Sites) != 1 || !r.Domestic.Sites[0].OK {
+		t.Fatalf("domestic sites: %+v", r.Domestic.Sites)
+	}
+	if r.Domestic.Ping == nil || r.Foreign.Ping == nil {
+		t.Fatal("ping stats missing")
 	}
 }

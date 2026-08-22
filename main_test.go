@@ -340,7 +340,6 @@ func TestServeAPI(t *testing.T) {
 	srv := httptest.NewServer(buildMux(serveDeps{
 		targets:   ts,
 		jobs:      newJobManager(),
-		reportDir: dir,
 		timeout:   2 * time.Second,
 		conc:      2,
 		nodes:     func() []Tunnel { return nil },

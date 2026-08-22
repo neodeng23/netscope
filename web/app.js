@@ -1,7 +1,7 @@
 // netscope 体检台前端（无构建链，原生 JS）
 // 所有检测都由按钮触发：单通道检测 / 全节点对比 / 趋势图均一次点击一次执行。
 const $ = (s) => document.querySelector(s);
-const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, trend: null, subPolling: null };
+const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null };
 
 // ---------- API ----------
 
@@ -85,19 +85,6 @@ function renderResults(job) {
   }
 }
 
-function renderReports(reports) {
-  const tb = $('#reports tbody');
-  tb.innerHTML = '';
-  $('#report-tip').hidden = reports.length > 0;
-  for (const r of reports) {
-    const tr = document.createElement('tr');
-    const isHtml = r.name.endsWith('.html');
-    tr.innerHTML = `
-      <td class="wrap">${r.name}</td><td>${r.mtime}</td><td>${fmtSize(r.size)}</td>
-      <td>${isHtml ? `<a href="/reports/${encodeURIComponent(r.name)}" target="_blank">打开</a>` : '-'}</td>`;
-    tb.appendChild(tr);
-  }
-}
 
 function renderSubs() {
   const tb = $('#subs tbody');
@@ -133,66 +120,6 @@ function renderNodes() {
   if (cur) sel.value = cur;
 }
 
-// ---------- 趋势图（SVG，一次点击一次绘制） ----------
-
-function renderTrendNodeOptions() {
-  const sel = $('#trend-node');
-  const cur = sel.value;
-  const names = new Set();
-  for (const snap of state.trend || []) {
-    for (const n of snap.nodes) names.add(n.node);
-  }
-  sel.innerHTML = '<option value="">选择节点</option>';
-  [...names].sort().forEach((name) => {
-    const o = document.createElement('option');
-    o.value = name;
-    o.textContent = name;
-    sel.appendChild(o);
-  });
-  if (cur) sel.value = cur;
-}
-
-function drawTrend() {
-  const node = $('#trend-node').value;
-  const box = $('#trend-box');
-  if (!node) { box.innerHTML = '<div class="tip">先选择要查看的节点</div>'; return; }
-  const snaps = (state.trend || []).map((s) => ({
-    time: s.label || s.time,
-    n: s.nodes.find((x) => x.node === node),
-  })).filter((s) => s.n);
-  if (snaps.length < 2) {
-    box.innerHTML = '<div class="tip">该节点的快照不足 2 次，多跑几次 <code>netscope sub rate</code> 再来</div>';
-    return;
-  }
-  const W = 760, H = 220, L = 44, R = 16, T = 16, B = 42;
-  const iw = W - L - R, ih = H - T - B;
-  const x = (i) => L + (iw * i) / (snaps.length - 1);
-  const y = (v) => T + ih * (1 - Math.max(0, Math.min(100, v)) / 100);
-  const pts = snaps.map((s, i) => `${x(i).toFixed(1)},${y(s.n.total).toFixed(1)}`).join(' ');
-  const first = snaps[0].n.total, last = snaps[snaps.length - 1].n.total;
-  const delta = last - first;
-  const lines = [];
-  // 网格与刻度
-  for (let v = 0; v <= 100; v += 25) {
-    lines.push(`<line x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}" stroke="#e2e8f0" stroke-width="1"/>`);
-    lines.push(`<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#94a3b8">${v}</text>`);
-  }
-  snaps.forEach((s, i) => {
-    if (snaps.length <= 8 || i % Math.ceil(snaps.length / 8) === 0 || i === snaps.length - 1) {
-      const label = s.time.length >= 10 ? s.time.slice(5, 10) : s.time;
-      lines.push(`<text x="${x(i)}" y="${H - 18}" text-anchor="middle" font-size="10" fill="#94a3b8">${escapeHTML(label)}</text>`);
-      lines.push(`<line x1="${x(i)}" y1="${T}" x2="${x(i)}" y2="${T + ih}" stroke="#f1f5f9" stroke-width="1"/>`);
-    }
-    lines.push(`<circle cx="${x(i)}" cy="${y(s.n.total)}" r="3" fill="#2563eb"/>`);
-  });
-  box.innerHTML = `
-    <div class="trend-head">${escapeHTML(node)} · 最新 ${last.toFixed(0)} 分（${delta >= 0 ? '+' : ''}${delta.toFixed(0)}）· 共 ${snaps.length} 次快照</div>
-    <svg viewBox="0 0 ${W} ${H}" class="trend-svg" role="img">
-      ${lines.join('\n')}
-      <polyline points="${pts}" fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round"/>
-    </svg>`;
-}
-
 // ---------- 交互 ----------
 
 async function refresh() {
@@ -205,12 +132,6 @@ async function refresh() {
   renderGroupFilter();
   renderTargets();
   renderNodes();
-  renderReports(s.reports || []);
-}
-
-async function refreshTrend() {
-  state.trend = await api('/api/trend');
-  renderTrendNodeOptions();
 }
 
 async function addSub() {
@@ -323,6 +244,83 @@ async function runChecks(via) {
   }
 }
 
+// ---------- 本机网络体检 ----------
+
+function siteRows(sites) {
+  return (sites || []).map((x) => `
+    <tr>
+      <td>${escapeHTML(x.name)}</td>
+      <td>${x.ok ? '<span class="pill ok">✅ ' + (x.status || '') + '</span>' : '<span class="pill bad">❌</span>'}</td>
+      <td>${x.totalMs ? x.totalMs.toFixed(1) + 'ms' : '-'}</td>
+    </tr>`).join('');
+}
+
+function pingLine(p) {
+  if (!p || !p.recv) return '❌ 不通';
+  return `avg ${p.avgMs.toFixed(1)}ms · 抖动 ${p.jitterMs.toFixed(1)}ms · 丢包 ${p.lossPct.toFixed(0)}%`;
+}
+
+function perspectivePanel(title, icon, p, extraRows) {
+  const head = extraRows.map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join('');
+  return `
+  <div class="local-col">
+    <h3>${icon} ${title}</h3>
+    ${p.err && !p.ip ? `<div class="kv"><span>查询失败</span><b>${escapeHTML(p.err)}</b></div>` : ''}
+    <div class="kv"><span>出口 IP</span><b>${escapeHTML(p.ip || '-')}</b></div>
+    <div class="kv"><span>归属地</span><b>${escapeHTML(p.location || '-')}</b></div>
+    ${head}
+    <div class="kv"><span>基准延迟</span><b>${pingLine(p.ping)}</b></div>
+    <table class="grid"><thead><tr><th>站点</th><th>状态</th><th>耗时</th></tr></thead><tbody>${siteRows(p.sites)}</tbody></table>
+  </div>`;
+}
+
+function renderLocal(r) {
+  const box = $('#local-box');
+  const fExtra = [];
+  if (r.foreign) {
+    if (r.foreign.isp) fExtra.push(['ISP', escapeHTML(r.foreign.isp)]);
+    if (r.foreign.flags) fExtra.push(['IP 标记', escapeHTML(r.foreign.flags)]);
+    if (r.foreign.risk >= 0) fExtra.push(['风险分', r.foreign.risk + '/100']);
+  }
+  let dnsLine = '未检测';
+  if (r.dns && r.dns.detail) {
+    const tag = r.dns.polluted === true ? '<span class="pill bad">疑似污染</span>'
+      : r.dns.polluted === false ? '<span class="pill ok">正常</span>' : '<span class="pill run">无法判定</span>';
+    dnsLine = `${tag} ${escapeHTML(r.dns.detail)}`;
+  }
+  let exitLine = '未知';
+  if (r.sameExit !== null && r.sameExit !== undefined) {
+    exitLine = r.sameExit
+      ? '<span class="pill ok">一致</span> 国内外看到的出口相同（无分流）'
+      : '<span class="pill bad">不一致</span> 国内外看到的出口不同（存在代理/分流/TUN）';
+  }
+  box.innerHTML = `
+    <div class="kv-line">体检时间 ${new Date(r.time).toLocaleString()}</div>
+    <div class="local-grid">
+      ${perspectivePanel('从国内测试', '🇨🇳', r.domestic || {}, [])}
+      ${perspectivePanel('从国外测试', '🌐', r.foreign || {}, fExtra)}
+    </div>
+    <div class="kv-line">DNS：${dnsLine}</div>
+    <div class="kv-line">出口一致性：${exitLine}</div>`;
+}
+
+async function runLocal() {
+  const btn = $('#btn-local');
+  btn.disabled = true;
+  $('#local-progress').textContent = '体检中…（约 5~15 秒）';
+  try {
+    const r = await fetch('/api/local', { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    renderLocal(await r.json());
+    $('#local-progress').textContent = '完成';
+  } catch (e) {
+    $('#local-progress').textContent = '';
+    alert('体检失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---------- 工具 ----------
 
 function escapeHTML(s) {
@@ -356,14 +354,12 @@ $('#btn-run').addEventListener('click', () => runChecks($('#via').value));
 $('#btn-run-all').addEventListener('click', () => runChecks('all'));
 $('#btn-refresh').addEventListener('click', async () => {
   await refresh();
-  await refreshTrend();
 });
 $('#btn-export').addEventListener('click', () => { location.href = '/api/targets/export'; });
 $('#file-import').addEventListener('change', (e) => {
   if (e.target.files.length > 0) importTargets(e.target.files[0]);
   e.target.value = '';
 });
-$('#btn-trend').addEventListener('click', drawTrend);
 $('#check-all').addEventListener('change', (e) => {
   document.querySelectorAll('.pick').forEach((c) => (c.checked = e.target.checked));
 });
@@ -376,4 +372,4 @@ $('#targets tbody').addEventListener('click', (e) => {
 refresh().catch((e) => {
   $('#result-tip').textContent = '加载失败：' + e.message + '（如配置了 --token，需在 URL 加 ?token=xxx）';
 });
-refreshTrend().catch(() => {});
+$('#btn-local').addEventListener('click', runLocal);

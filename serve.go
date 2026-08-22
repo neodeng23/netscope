@@ -173,14 +173,16 @@ func randID() string {
 // ---------- 检测任务（全部由网页按钮手动触发，一次性完成） ----------
 
 type jobItem struct {
-	URL    string       `json:"url"`
-	Node   string       `json:"node,omitempty"` // 全节点对比时记录所用节点
-	Result *CheckResult `json:"result,omitempty"`
+	URL      string `json:"url"`
+	Node     string `json:"node,omitempty"`     // 全节点对比/游戏平台检测时记录所用节点
+	Platform string `json:"platform,omitempty"` // 游戏平台检测：steam / psn
+	Result   any    `json:"result,omitempty"`   // *CheckResult 或 *SteamCheck/*PSNCheck
 }
 
 type checkJob struct {
 	ID       string    `json:"id"`
 	Via      string    `json:"via"`
+	Kind     string    `json:"kind,omitempty"` // 空=URL 检测；game=游戏平台
 	Total    int       `json:"total"`
 	Done     int       `json:"done"`
 	Finished bool      `json:"finished"`
@@ -195,10 +197,12 @@ type jobManager struct {
 
 func newJobManager() *jobManager { return &jobManager{jobs: map[string]*checkJob{}} }
 
-// jobTask 是一个「目标 × 通道」组合。
+// jobTask 是一个「目标 × 通道」组合。GamePlatform 非空时为游戏平台检测
+// （steam/psn），此时 URL 填平台显示名。
 type jobTask struct {
-	URL    string
-	Tunnel Tunnel
+	URL          string
+	Tunnel       Tunnel
+	GamePlatform string
 }
 
 // Start 为 tasks 发起异步检测（conc 路并发），返回任务 ID。
@@ -208,16 +212,23 @@ func (jm *jobManager) Start(ctx context.Context, label string, tasks []jobTask, 
 	// 只有任务涉及多个通道（全节点对比）才逐条记录节点；
 	// 单通道任务每行节点相同，Via 标签已说明，避免结果表多一列冗余。
 	distinct := map[string]bool{}
+	anyGame := false
 	for _, t := range tasks {
 		distinct[t.Tunnel.Name()] = true
+		if t.GamePlatform != "" {
+			anyGame = true
+		}
 	}
-	withNode := len(distinct) > 1
+	withNode := len(distinct) > 1 || anyGame
 	for _, t := range tasks {
-		item := jobItem{URL: t.URL}
+		item := jobItem{URL: t.URL, Platform: t.GamePlatform}
 		if withNode {
 			item.Node = t.Tunnel.Name()
 		}
 		j.Items = append(j.Items, item)
+	}
+	if anyGame {
+		j.Kind = "game"
 	}
 	j.Total = len(j.Items)
 	jm.mu.Lock()
@@ -241,7 +252,22 @@ func (jm *jobManager) Start(ctx context.Context, label string, tasks []jobTask, 
 				if ctx.Err() != nil {
 					return
 				}
-				cctx, cancel := context.WithTimeout(ctx, timeout)
+				cctx, cancel := context.WithTimeout(ctx, timeout+2*time.Second)
+				if gp := tasks[i].GamePlatform; gp != "" {
+					var res any
+					switch gp {
+					case "steam":
+						res = CheckSteam(cctx, tasks[i].Tunnel, timeout)
+					case "psn":
+						res = CheckPSN(cctx, tasks[i].Tunnel, timeout)
+					}
+					cancel()
+					jm.mu.Lock()
+					j.Items[i].Result = res
+					j.Done++
+					jm.mu.Unlock()
+					return
+				}
 				r := HTTPCheck(cctx, tasks[i].Tunnel, j.Items[i].URL, timeout)
 				FillExitIP(cctx, tasks[i].Tunnel, &r)
 				cancel()
@@ -503,6 +529,64 @@ func buildMux(d serveDeps) *http.ServeMux {
 				label = "direct"
 			}
 		}
+		id := d.jobs.Start(context.Background(), label, tasks, d.timeout, d.conc)
+		writeJSON(w, map[string]string{"id": id})
+	})))
+
+	// /api/game：单平台 × 单通道检测（同步返回）
+	mux.Handle("/api/game", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct{ Platform, Via string }
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if req.Platform != "steam" && req.Platform != "psn" {
+			http.Error(w, "platform 必须为 steam 或 psn", http.StatusBadRequest)
+			return
+		}
+		var t Tunnel = Direct
+		if req.Via != "" && req.Via != "direct" {
+			built, err := BuildTunnel(d.nodes(), req.Via)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			t = built
+		}
+		gctx, cancel := context.WithTimeout(context.Background(), d.timeout+2*time.Second)
+		defer cancel()
+		if req.Platform == "steam" {
+			writeJSON(w, CheckSteam(gctx, t, d.timeout))
+			return
+		}
+		writeJSON(w, CheckPSN(gctx, t, d.timeout))
+	})))
+
+	// /api/game/all：Steam + PSN × 全部节点（两平台共用一次全节点检测）
+	mux.Handle("/api/game/all", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		nodes := d.nodes()
+		if len(nodes) == 0 {
+			http.Error(w, "未加载订阅节点（先在订阅清单添加订阅）", http.StatusBadRequest)
+			return
+		}
+		if len(nodes)*2 > 800 {
+			http.Error(w, fmt.Sprintf("节点过多（%d），请减少后再试", len(nodes)), http.StatusBadRequest)
+			return
+		}
+		var tasks []jobTask
+		for _, n := range nodes {
+			tasks = append(tasks, jobTask{URL: "Steam", Tunnel: n, GamePlatform: "steam"})
+			tasks = append(tasks, jobTask{URL: "PlayStation", Tunnel: n, GamePlatform: "psn"})
+		}
+		label := fmt.Sprintf("游戏平台（%d 节点）", len(nodes))
 		id := d.jobs.Start(context.Background(), label, tasks, d.timeout, d.conc)
 		writeJSON(w, map[string]string{"id": id})
 	})))

@@ -163,3 +163,25 @@ table.matrix tbody tr:hover td { filter: brightness(.96); }
 /* 可排序列头 */
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--blue); }
+
+/* 游戏平台连接(双列等宽) */
+.game-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .game-grid { grid-template-columns: 1fr; } }
+.game-col { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fcfdff; min-width: 0; }
+.game-col h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+.game-col h3 .spacer { flex: 1; }
+.game-col h3 .g-name { font-weight: 700; }
+.game-col select { padding: 4px 8px; font-size: 12.5px; border-radius: 8px; max-width: 170px; }
+.game-box { min-height: 60px; }
+.game-box .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 4px 0; }
+.game-box .kv span { color: var(--sub); flex: none; }
+.game-box .kv b { font-weight: 500; word-break: break-all; text-align: right; }
+table.game-grid-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.game-grid-tbl th, table.game-grid-tbl td { padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: left; }
+table.game-grid-tbl th { color: var(--sub); font-weight: 600; font-size: 11.5px; position: sticky; top: 0; background: #fcfdff; }
+table.game-grid-tbl td.g-node { max-width: 130px; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+table.game-grid-tbl .gc-ok { color: var(--ok); }
+table.game-grid-tbl .gc-warn { color: #b45309; }
+table.game-grid-tbl .gc-bad { color: var(--bad); }
+.game-scroll { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.game-summary { font-size: 12px; color: var(--sub); padding: 6px 2px 2px; }

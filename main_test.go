@@ -400,8 +400,15 @@ func TestServeAPI(t *testing.T) {
 	}
 	okCount := 0
 	for _, it := range job.Items {
-		if it.Result != nil && it.Result.OK {
-			okCount++
+		switch r := it.Result.(type) {
+		case *CheckResult:
+			if r.OK {
+				okCount++
+			}
+		case map[string]any: // 经 JSON 往返后
+			if r["ok"] == true {
+				okCount++
+			}
 		}
 	}
 	if okCount != 1 {

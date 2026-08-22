@@ -24,7 +24,7 @@
     </div>
   <div class="toolbar">
     <label>检测通道
-      <select id="via"><option value="direct">⏱ 直连（本机）</option></select>
+      <select id="via" class="via-select"></select>
     </label>
     <button id="btn-run" class="primary">▶ 开始检测</button>
     <button id="btn-run-all" title="每个勾选地址 × 全部节点逐一检测">🌐 全节点对比</button>
@@ -99,6 +99,36 @@
     </div>
     <div id="result-notes" class="notes" hidden></div>
     <div id="result-tip" class="tip">勾选地址后点「开始检测」或「全节点对比」</div>
+  </section>
+
+  <section class="card">
+    <h2>🎮 游戏平台连接
+      <span class="spacer"></span>
+      <span id="game-progress" class="progress"></span>
+      <button id="btn-game-all" class="mini-btn" title="Steam 与 PlayStation × 全部节点，两平台共用一次检测">🌐 全节点检测</button>
+    </h2>
+    <div class="game-grid">
+      <div class="game-col">
+        <h3><span class="g-name">🎮 Steam</span>
+          <span class="spacer"></span>
+          <select id="steam-via" class="via-select"></select>
+          <button id="btn-steam" class="mini-btn">▶ 测试</button>
+        </h3>
+        <div id="steam-box" class="game-box">
+          <div class="tip">选通道测试商店/社区连通性与货币区（货币区随出口 IP 变化）</div>
+        </div>
+      </div>
+      <div class="game-col">
+        <h3><span class="g-name">🕹 PlayStation</span>
+          <span class="spacer"></span>
+          <select id="psn-via" class="via-select"></select>
+          <button id="btn-psn" class="mini-btn">▶ 测试</button>
+        </h3>
+        <div id="psn-box" class="game-box">
+          <div class="tip">选通道测试商店/账户/官网连通性与店面区域（店面随出口 IP 分发）</div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="card">

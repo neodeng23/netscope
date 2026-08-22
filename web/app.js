@@ -110,6 +110,7 @@ function renderResults(job) {
     state.matrixOrder = null; // 新任务:行序重新锁定
   }
   state.lastJob = job;
+  if (job.kind === 'game') { renderGameJob(job); return; }
   if (isAllNodeJob(job)) { renderMatrix(job); return; }
   $('#matrix-box').hidden = true;
   $('#results').hidden = false;
@@ -156,16 +157,17 @@ function renderSubs() {
 }
 
 function renderNodes() {
-  const sel = $('#via');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="direct">⏱ 直连（本机）</option>';
-  state.nodes.forEach((n, i) => {
-    const o = document.createElement('option');
-    o.value = n.name;
-    o.textContent = `${i + 1}. ${n.name}（${n.type}）`;
-    sel.appendChild(o);
+  document.querySelectorAll('select.via-select').forEach((sel) => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="direct">⏱ 直连（本机）</option>';
+    state.nodes.forEach((n, i) => {
+      const o = document.createElement('option');
+      o.value = n.name;
+      o.textContent = `${i + 1}. ${n.name}（${n.type}）`;
+      sel.appendChild(o);
+    });
+    if (cur) sel.value = cur;
   });
-  if (cur) sel.value = cur;
 }
 
 // ---------- 交互 ----------
@@ -380,6 +382,159 @@ function renderMatrix(job, forceSort = false) {
   $('#matrix-summary').textContent = `${nodeNames.length} 节点 × ${urls.length} 地址 · 已完成 ${done}/${job.items.length} · 全通过 ${full} 个`;
 }
 
+// ---------- 游戏平台连接 ----------
+
+function sitePill(st) {
+  if (!st) return '-';
+  if (st.ok) return `<span class="gc-ok" title="${st.status} · ${st.totalMs ? st.totalMs.toFixed(0) : '-'}ms">✅</span>`;
+  if (st.reachable && st.status) return `<span class="gc-warn" title="HTTP ${st.status}">🟡</span>`;
+  return `<span class="gc-bad" title="${escapeHTML(st.err || '不可达')}">❌</span>`;
+}
+
+function renderSteamSingle(r) {
+  const box = $('#steam-box');
+  const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  box.innerHTML = `
+    ${kv('通道', escapeHTML(r.via))}
+    ${kv('商店', pillOf(r.store))}
+    ${kv('社区', pillOf(r.community))}
+    ${kv('货币区', r.currency ? `${escapeHTML(r.currency)}（${escapeHTML(r.region || '-')}）` : '-')}
+    <div class="game-summary">货币区由 Steam 按出口 IP 判定，换节点即换区</div>`;
+  function pillOf(st) {
+    if (!st) return '-';
+    if (st.ok) return `✅ ${st.status} · ${st.totalMs.toFixed(0)}ms`;
+    if (st.reachable && st.status) return `🟡 HTTP ${st.status}`;
+    return `❌ ${escapeHTML(st.err || '不可达')}`;
+  }
+}
+
+function renderPsnSingle(r) {
+  const box = $('#psn-box');
+  const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  box.innerHTML = `
+    ${kv('通道', escapeHTML(r.via))}
+    ${kv('商店', pillOf(r.store))}
+    ${kv('账户服务', pillOf(r.account))}
+    ${kv('官网', pillOf(r.web))}
+    ${kv('店面区域', r.storefront ? `${escapeHTML(r.storefront)}（${escapeHTML(r.region || '-')}）` : '-')}
+    <div class="game-summary">店面由 Sony 按出口 IP 分发（语言固定 en）</div>`;
+  function pillOf(st) {
+    if (!st) return '-';
+    if (st.ok) return `✅ ${st.status} · ${st.totalMs.toFixed(0)}ms`;
+    if (st.reachable && st.status) return `🟡 HTTP ${st.status}`;
+    return `❌ ${escapeHTML(st.err || '不可达')}`;
+  }
+}
+
+async function runGame(platform) {
+  const btn = $(`#btn-${platform}`);
+  btn.disabled = true;
+  const box = $(`#${platform}-box`);
+  box.innerHTML = '<div class="tip">检测中…（约 5~15 秒）</div>';
+  try {
+    const r = await fetch('/api/game', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, via: $(`#${platform}-via`).value }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    if (platform === 'steam') renderSteamSingle(data); else renderPsnSingle(data);
+  } catch (e) {
+    box.innerHTML = `<div class="tip">检测失败：${escapeHTML(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// 全节点(两平台共用一次任务),按平台拆分渲染
+function gameRowCells(platform, r, node) {
+  if (!r) return { cells: `<td class="g-node" title="${escapeHTML(node)}">${escapeHTML(node)}</td><td colspan="4" class="gc-bad" style="color:#94a3b8">…</td>`, ok: false, ms: null, done: false };
+  if (platform === 'steam') {
+    const ok = r.store && r.store.ok && r.community && r.community.ok;
+    const ms = [r.store, r.community].filter((x) => x && x.totalMs).map((x) => x.totalMs);
+    const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
+    const tip = `${r.currency ? '货币区 ' + r.currency + ' ' + (r.region || '') : ''}${r.err ? '\n' + r.err : ''}`;
+    return {
+      cells: `<td class="g-node" title="${escapeHTML(node)}">${escapeHTML(node)}</td>
+        <td title="${r.store ? r.store.status + ' · ' + (r.store.totalMs || 0).toFixed(0) + 'ms' : ''}">${sitePill(r.store)}</td>
+        <td title="${r.community ? r.community.status + ' · ' + (r.community.totalMs || 0).toFixed(0) + 'ms' : ''}">${sitePill(r.community)}</td>
+        <td title="${escapeHTML(tip)}">${r.currency ? escapeHTML(r.currency) + ' ' + escapeHTML(r.region || '') : '-'}</td>
+        <td>${avg ? avg.toFixed(0) + 'ms' : '-'}</td>`,
+      ok, ms: avg, done: true,
+    };
+  }
+  const ok = r.store && r.store.ok && r.account && r.account.ok && r.web && r.web.ok;
+  const ms = [r.store, r.account, r.web].filter((x) => x && x.totalMs).map((x) => x.totalMs);
+  const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
+  const tip = `${r.storefront ? '店面 ' + r.storefront + ' ' + (r.region || '') : ''}${r.err ? '\n' + r.err : ''}`;
+  return {
+    cells: `<td class="g-node" title="${escapeHTML(node)}">${escapeHTML(node)}</td>
+      <td>${sitePill(r.store)}</td><td>${sitePill(r.account)}</td><td>${sitePill(r.web)}</td>
+      <td title="${escapeHTML(tip)}">${r.storefront ? escapeHTML(r.region || r.storefront) : '-'}</td>
+      <td>${avg ? avg.toFixed(0) + 'ms' : '-'}</td>`,
+    ok, ms: avg, done: true,
+  };
+}
+
+let gameAllState = { id: null, order: null, finished: false };
+
+function renderGameJob(job) {
+  const byPlatform = { steam: [], psn: [] };
+  for (const it of job.items) {
+    byPlatform[it.platform === 'steam' ? 'steam' : 'psn'].push(it);
+  }
+  for (const platform of ['steam', 'psn']) {
+    const items = byPlatform[platform];
+    const rows = items.map((it) => ({ node: it.node, r: it.result, ...gameRowCells(platform, it.result, it.node) }));
+    // 行序:进行中锁定出现顺序;完成后 全通优先->平均延迟升序
+    let ordered = rows;
+    if (gameAllState.id === job.id && gameAllState.order && !job.finished) {
+      const ord = gameAllState.order;
+      ordered = ord.map((n) => rows.find((r) => r.node === n)).filter(Boolean);
+    } else if (job.finished) {
+      ordered = rows.slice().sort((a, b) => (b.ok - a.ok) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
+    }
+    if (gameAllState.id !== job.id) gameAllState.order = items.map((it) => it.node);
+    const head = platform === 'steam'
+      ? '<tr><th>节点</th><th>商店</th><th>社区</th><th>货币区</th><th>延迟</th></tr>'
+      : '<tr><th>节点</th><th>商店</th><th>账户</th><th>官网</th><th>区域</th><th>延迟</th></tr>';
+    const body = ordered.map((r) => `<tr>${r.cells}</tr>`).join('');
+    const done = items.filter((it) => it.result).length;
+    const full = rows.filter((r) => r.ok).length;
+    $(`#${platform}-box`).innerHTML = `
+      <div class="game-summary">已完成 ${done}/${items.length} · 全通 ${full} 个${job.finished ? '' : ' · 行序检测中锁定'}</div>
+      <div class="game-scroll"><table class="game-grid-tbl"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }
+  $('#game-progress').textContent = job.finished ? `完成 ${job.done}/${job.total}` : `${job.done}/${job.total}`;
+  if (job.finished && state.polling) { clearInterval(state.polling); state.polling = null; }
+  if (gameAllState.id !== job.id) gameAllState.id = job.id;
+}
+
+async function runGameAll() {
+  const btn = $('#btn-game-all');
+  btn.disabled = true;
+  $('#game-progress').textContent = '启动中…';
+  gameAllState = { id: null, order: null, finished: false };
+  try {
+    const { id } = await api('/api/game/all', { method: 'POST' });
+    gameAllState.id = id;
+    state.polling = setInterval(async () => {
+      const job = await api('/api/jobs/' + id);
+      renderGameJob(job);
+    }, 900);
+  } catch (e) {
+    alert('发起失败：' + e.message);
+    $('#game-progress').textContent = '';
+    btn.disabled = false;
+    return;
+  }
+  // 轮询开始即可再点(检测中重复点击由 alert 提示)——完成后恢复按钮
+  const check = setInterval(() => {
+    if (!state.polling) { clearInterval(check); btn.disabled = false; }
+  }, 800);
+}
+
 // ---------- 结果说明 ----------
 
 // 常见异常状态码解释（仅对本次结果里出现过的展示）
@@ -572,6 +727,9 @@ $('#targets tbody').addEventListener('click', (e) => {
 refresh().catch((e) => {
   $('#result-tip').textContent = '加载失败：' + e.message + '（如配置了 --token，需在 URL 加 ?token=xxx）';
 });
+$('#btn-steam').addEventListener('click', () => runGame('steam'));
+$('#btn-psn').addEventListener('click', () => runGame('psn'));
+$('#btn-game-all').addEventListener('click', runGameAll);
 $('#btn-local').addEventListener('click', runLocal);
 function rerenderMatrix() {
   if (state.lastJob && isAllNodeJob(state.lastJob)) renderMatrix(state.lastJob, true);

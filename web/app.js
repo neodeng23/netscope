@@ -54,11 +54,14 @@ function renderResult(item, withNode) {
     return tr;
   }
   const r = item.result;
-  const ok = r.ok;
+  let pill;
+  if (r.ok) pill = '<span class="pill ok">✅ 可访问</span>';
+  else if (r.reachable && r.status) pill = `<span class="pill warn">🟡 可达 · HTTP ${r.status}</span>`;
+  else pill = '<span class="pill bad">❌ 不可达</span>';
   tr.innerHTML = `
     <td class="wrap">${escapeHTML(item.url)}</td>${nodeCell}
-    <td>${ok ? '<span class="pill ok">✅ 可访问</span>' : '<span class="pill bad">❌ 不可达</span>'}</td>
-    <td>${ok ? r.status : '-'}</td>
+    <td>${pill}</td>
+    <td>${r.status || '-'}</td>
     <td>${r.totalMs ? r.totalMs.toFixed(1) + 'ms' : '-'}</td>
     <td>${r.connMs ? r.connMs.toFixed(1) + 'ms' : '-'}</td>
     <td>${escapeHTML(r.exitIp || '-')}${r.via && r.via !== 'direct' ? '<span class="tag">' + escapeHTML(r.via) + '</span>' : ''}</td>

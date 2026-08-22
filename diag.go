@@ -217,7 +217,9 @@ func InspectHTTP(ctx context.Context, t Tunnel, rawURL string, timeout time.Dura
 	hctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(hctx, "GET", u.String(), nil)
-	req.Header.Set("User-Agent", subUA)
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		r.Err = cleanErr(err)

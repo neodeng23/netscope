@@ -96,6 +96,7 @@ table.grid tbody tr:hover { background: #f8fafc; }
 .pill.ok { background: #dcfce7; color: var(--ok); }
 .pill.bad { background: #fee2e2; color: var(--bad); }
 .pill.run { background: #dbeafe; color: var(--blue); }
+.pill.warn { background: #fef3c7; color: #b45309; }
 .tag { display: inline-block; font-size: 11px; background: #eef2ff; color: #4338ca; border-radius: 5px; padding: 1px 7px; margin-left: 6px; }
 .tag.group-tag { margin-left: 0; cursor: pointer; }
 .tag.group-tag:hover { background: #e0e7ff; }

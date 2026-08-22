@@ -266,8 +266,13 @@ func cmdSubCheck(ctx context.Context, args []string) int {
 	anyOK := false
 	for _, r := range results {
 		ok, code := "❌", "-"
-		if r.OK {
+		switch {
+		case r.OK:
 			ok, code = "✅", strconv.Itoa(r.Status)
+			anyOK = true
+		case r.Reachable:
+			// 拿到 4xx/5xx：网络层通，内容被拒（如 Cloudflare 防护）
+			ok, code = "🟡", strconv.Itoa(r.Status)
 			anyOK = true
 		}
 		row := []string{r.Node, r.NodeType, shortTarget(r.Target), ok, code, numOrDash(r.ConnMs), numOrDash(r.TotalMs)}

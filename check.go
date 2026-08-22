@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"strings"
 	"net/http"
 	"net/http/httptrace"
 	"sync"
@@ -16,8 +17,9 @@ type CheckResult struct {
 	Node     string  `json:"node"`     // 通道名（direct 或节点名）
 	NodeType string  `json:"nodeType"` // ss / vmess / direct ...
 	Target   string  `json:"target"`
-	OK       bool    `json:"ok"`
-	Status   int     `json:"status"`
+	OK        bool    `json:"ok"`       // 2xx/3xx
+	Reachable bool    `json:"reachable"` // 拿到任何 HTTP 响应(含 4xx/5xx)即网络可达
+	Status    int     `json:"status"`
 	ConnMs   float64 `json:"connMs"`   // 建连耗时（含 TLS）
 	TotalMs  float64 `json:"totalMs"`  // 完整请求耗时
 	Err      string  `json:"err,omitempty"`
@@ -61,7 +63,10 @@ func HTTPCheck(ctx context.Context, t Tunnel, target string, timeout time.Durati
 		r.Err = err.Error()
 		return r
 	}
-	req.Header.Set("User-Agent", subUA)
+	// 浏览器化请求头：Cloudflare 等防护对非浏览器 UA 会直接 403，导致"能访问的站点被判不可达"
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	tr := &http.Transport{
 		DialContext:     t.DialContext,
 		DialTLSContext:  dialTLSVia(t, nil),
@@ -86,7 +91,7 @@ func HTTPCheck(ctx context.Context, t Tunnel, target string, timeout time.Durati
 		r.ConnMs = float64(connDone.Sub(start).Microseconds()) / 1000.0
 	}
 	if err != nil {
-		r.Err = cleanErr(err)
+		r.Err = friendlyErr(err)
 		tr.CloseIdleConnections()
 		return r
 	}
@@ -96,6 +101,7 @@ func HTTPCheck(ctx context.Context, t Tunnel, target string, timeout time.Durati
 	_ = body
 	r.Status = resp.StatusCode
 	r.OK = resp.StatusCode >= 200 && resp.StatusCode < 400
+	r.Reachable = true
 	return r
 }
 
@@ -105,6 +111,33 @@ func cleanErr(err error) string {
 		s = s[:120]
 	}
 	return s
+}
+
+// friendlyErr 把常见网络错误翻译成可操作的提示。
+func friendlyErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	switch {
+	case contains(s, "connection reset by peer"), contains(s, "connection was force"):
+		return "连接被重置（直连可能被墙或被目标拒绝，可切换节点通道再试）"
+	case contains(s, "i/o timeout"), contains(s, "context deadline"), contains(s, "Client.Timeout"):
+		return "超时（链路慢或被丢弃，可切换节点通道再试）"
+	case contains(s, "no route to host"), contains(s, "network is unreachable"):
+		return "网络不可达"
+	case contains(s, "connection refused"):
+		return "连接被拒绝（端口未开放）"
+	case contains(s, "tls:"), contains(s, "certificate"):
+		return "TLS/证书错误: " + cleanErr(err)
+	case contains(s, "proxyconnect"), contains(s, "socks"), contains(s, "connect error"):
+		return "节点连接失败: " + cleanErr(err)
+	}
+	return cleanErr(err)
+}
+
+func contains(s, sub string) bool {
+	return strings.Contains(s, sub)
 }
 
 // FillExitIP 为检测结果补充出口 IP 与归属地（带缓存，每通道只查一次）。

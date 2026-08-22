@@ -39,10 +39,11 @@ type Config struct {
 	Score ScoreWeights `yaml:"score,omitempty"`
 	// serve 是 Web 体检台的默认参数
 	Serve struct {
-		Listen     string `yaml:"listen,omitempty"`
-		Token      string `yaml:"token,omitempty"`
-		ReportDir  string `yaml:"reportDir,omitempty"`
+		Listen      string `yaml:"listen,omitempty"`
+		Token       string `yaml:"token,omitempty"`
+		ReportDir   string `yaml:"reportDir,omitempty"`
 		TargetsFile string `yaml:"targetsFile,omitempty"`
+		SubsFile    string `yaml:"subsFile,omitempty"`
 	} `yaml:"serve,omitempty"`
 	// reports 是快照清理策略（keep 保留份数、keepDays 保留天数；0 = 不限）
 	Reports struct {
@@ -110,6 +111,7 @@ serve:
   token: ""
   # reportDir: ~/.netscope/reports
   # targetsFile: ~/.netscope/targets.json
+  # subsFile: ~/.netscope/subs.json
 
 # 报告快照清理（sub rate 保存后自动执行；0 = 不限）
 reports:

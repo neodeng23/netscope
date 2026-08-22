@@ -28,7 +28,8 @@ netscope report diff                                   # 最近两次评分快�
 netscope ip show                                       # 国内外出口 IP 双视角 + IP 风险分
 netscope dns audit github.com                          # 解析对比 + 污染检测 + EDNS 出口
 netscope route bloat                                   # bufferbloat：满载下载时的延迟变化
-netscope serve --sub "订阅链接"                         # Web 体检台，默认 0.0.0.0:8420，局域网可访问
+netscope serve                                         # Web 体检台，默认 0.0.0.0:8420，局域网可访问
+                                                       # 订阅直接在网页上添加（支持多个），或启动时 --sub 预置
 netscope sub unlock -sub "订阅链接" --services TikTok,Spotify
 netscope config init && netscope config show             # 生成/查看 YAML 配置预设
 netscope report clean --keep 30 --keep-days 60           # 清理报告快照
@@ -172,7 +173,7 @@ IP 质量初版仅含归属地展示与 IDC/代理标记（ip-api 字段），�
 | 5 | `sub ping --udp` | 经节点 STUN（RFC 5389 自实现）往返测量：验证节点 UDP 能力、取回出口地址、UDP 延迟/丢包统计；Tunnel 接口增加 `ListenPacket`/`SupportsUDP`（mihomo UDP 通道） | ✅ |
 | 6 | `sub info` | 订阅用量面板：`subscription-userinfo` 响应头（upload/download/total/expire，兼容毫秒时间戳），已用/剩余/使用率/到期倒计时 | ✅ |
 | 7 | `route bloat` | bufferbloat：空闲基准延迟 -> N 流并发下载满载持续测延迟 -> 恢复期观察；按平均延迟增量评级 A+/A/B/C/D；ICMP 优先、无权限降级 TCP | ✅ |
-| 8 | `serve` 深化 | 地址清单分组（可改分组、按组过滤）、JSON 导入导出；**全节点对比**（勾选地址 × 全部节点批量检测）；评分趋势图（SVG，按节点看多次快照的总分变化）；全部由按钮手动触发 | ✅ |
+| 8 | `serve` 深化 | 地址清单分组（可改分组、按组过滤）、JSON 导入导出；**全节点对比**（勾选地址 × 全部节点批量检测）；评分趋势图（SVG，按节点看多次快照的总分变化）；**多订阅网页管理**（添加/删除多个订阅，持久化 `~/.netscope/subs.json`，跨订阅去重，节点自动进入通道下拉）；全部由按钮手动触发 | ✅ |
 
 **P1 验收补充**：
 

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -297,5 +298,90 @@ func TestMeasureUpload(t *testing.T) {
 	}
 	if got != r.BytesRead {
 		t.Fatalf("server got %d bytes, client sent %d", got, r.BytesRead)
+	}
+}
+
+// ---------- 订阅清单(serve API 端到端) ----------
+
+func TestServeSubsAPI(t *testing.T) {
+	dir := t.TempDir()
+	// 本地 Clash YAML,两个节点(离线可解析)
+	subFile := filepath.Join(dir, "sub.yaml")
+	os.WriteFile(subFile, []byte("proxies:\n  - {name: 节点A, type: http, server: 1.2.3.4, port: 8080}\n  - {name: 节点B, type: socks5, server: 5.6.7.8, port: 1080}\n"), 0o644)
+
+	subs, err := loadSubs(filepath.Join(dir, "subs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, _ := loadTargets(filepath.Join(dir, "targets.json"))
+	loader := newNodeLoader(subs)
+	srv := httptest.NewServer(buildMux(serveDeps{
+		targets:   targets,
+		subs:      subs,
+		jobs:      newJobManager(),
+		reportDir: dir,
+		timeout:   2 * time.Second,
+		conc:      2,
+		nodes:     loader.Get,
+		reload:    func() { loader.Reload(context.Background()) },
+	}))
+	defer srv.Close()
+
+	// 添加订阅 -> 节点加载完成
+	resp, err := http.Post(srv.URL+"/api/subs", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"url":%q}`, subFile)))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("add sub: %v %v", err, resp)
+	}
+	var ar struct {
+		Sub   Sub  `json:"sub"`
+		Added bool `json:"added"`
+	}
+	json.NewDecoder(resp.Body).Decode(&ar)
+	resp.Body.Close()
+	if !ar.Added || ar.Sub.ID == "" {
+		t.Fatalf("bad add resp: %+v", ar)
+	}
+	// 重复添加按 URL 去重
+	resp, _ = http.Post(srv.URL+"/api/subs", "application/json", strings.NewReader(fmt.Sprintf(`{"url":%q}`, subFile)))
+	var ar2 struct{ Added bool }
+	json.NewDecoder(resp.Body).Decode(&ar2)
+	resp.Body.Close()
+	if ar2.Added {
+		t.Fatal("重复订阅应跳过")
+	}
+
+	waitFor := func(cond func(s map[string]any) bool) map[string]any {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			r, _ := http.Get(srv.URL + "/api/state")
+			var st map[string]any
+			json.NewDecoder(r.Body).Decode(&st)
+			r.Body.Close()
+			if cond(st) {
+				return st
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		t.Fatal("等待状态超时")
+		return nil
+	}
+
+	st := waitFor(func(s map[string]any) bool { return len(s["nodes"].([]any)) == 2 })
+	subsList := st["subs"].([]any)
+	if len(subsList) != 1 || int(subsList[0].(map[string]any)["nodes"].(float64)) != 2 {
+		t.Fatalf("subs state: %v", subsList)
+	}
+
+	// 删除订阅 -> 节点清空
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/subs/"+ar.Sub.ID, nil)
+	dresp, err := http.DefaultClient.Do(req)
+	if err != nil || dresp.StatusCode != 200 {
+		t.Fatalf("delete sub: %v %v", err, dresp)
+	}
+	dresp.Body.Close()
+	waitFor(func(s map[string]any) bool { return len(s["nodes"].([]any)) == 0 })
+	if len(subs.All()) != 0 {
+		t.Fatalf("删除后清单应为空: %+v", subs.All())
 	}
 }

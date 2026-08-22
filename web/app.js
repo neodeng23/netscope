@@ -1,7 +1,7 @@
 // netscope 体检台前端（无构建链，原生 JS）
 // 所有检测都由按钮触发：单通道检测 / 全节点对比 / 趋势图均一次点击一次执行。
 const $ = (s) => document.querySelector(s);
-const state = { targets: [], nodes: [], groups: [], polling: null, trend: null };
+const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, trend: null, subPolling: null };
 
 // ---------- API ----------
 
@@ -99,6 +99,27 @@ function renderReports(reports) {
   }
 }
 
+function renderSubs() {
+  const tb = $('#subs tbody');
+  tb.innerHTML = '';
+  $('#subs-tip').hidden = state.subs.length > 0;
+  const loading = state.subs.some((x) => !x.nodes && !x.err);
+  $('#subs-progress').textContent = loading ? '加载中…' : '';
+  for (const sub of state.subs) {
+    const tr = document.createElement('tr');
+    let count;
+    if (sub.err) count = `<span class="pill bad" title="${escapeHTML(sub.err)}">失败</span>`;
+    else if (sub.nodes > 0) count = `<span class="pill ok">${sub.nodes}</span>`;
+    else count = '<span class="pill run">…</span>';
+    tr.innerHTML = `
+      <td class="sub-cell" title="${escapeHTML(sub.url)}">${escapeHTML(sub.url)}${sub.note ? '<span class="sub-note">' + escapeHTML(sub.note) + '</span>' : ''}</td>
+      <td>${count}</td>
+      <td>${fmtTime(sub.added)}</td>
+      <td><button class="danger" data-sub-del="${sub.id}">删除</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+
 function renderNodes() {
   const sel = $('#via');
   const cur = sel.value;
@@ -177,8 +198,10 @@ function drawTrend() {
 async function refresh() {
   const s = await api('/api/state');
   state.targets = s.targets || [];
+  state.subs = s.subs || [];
   state.groups = s.groups || [];
   state.nodes = s.nodes || [];
+  renderSubs();
   renderGroupFilter();
   renderTargets();
   renderNodes();
@@ -188,6 +211,43 @@ async function refresh() {
 async function refreshTrend() {
   state.trend = await api('/api/trend');
   renderTrendNodeOptions();
+}
+
+async function addSub() {
+  const input = $('#new-sub');
+  const url = input.value.trim();
+  if (!url) return;
+  try {
+    const { added } = await api('/api/subs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!added) { alert('该订阅已在清单中'); }
+    input.value = '';
+    await refresh();
+    watchSubsLoading();
+  } catch (e) { alert('添加失败：' + e.message); }
+}
+
+// 添加订阅后轮询,直到节点数出现或报错(最长 2 分钟)
+function watchSubsLoading() {
+  if (state.subPolling) clearInterval(state.subPolling);
+  const deadline = Date.now() + 120 * 1000;
+  state.subPolling = setInterval(async () => {
+    try { await refresh(); } catch (e) { return; }
+    const busy = state.subs.some((x) => !x.nodes && !x.err);
+    if (!busy || Date.now() > deadline) {
+      clearInterval(state.subPolling);
+      state.subPolling = null;
+    }
+  }, 1200);
+}
+
+async function delSub(id) {
+  await api('/api/subs/' + id, { method: 'DELETE' });
+  await refresh();
+  watchSubsLoading();
 }
 
 async function addTarget() {
@@ -284,6 +344,12 @@ function fmtSize(n) {
 
 // ---------- 启动 ----------
 
+$('#btn-sub-add').addEventListener('click', addSub);
+$('#new-sub').addEventListener('keydown', (e) => { if (e.key === 'Enter') addSub(); });
+$('#subs tbody').addEventListener('click', (e) => {
+  const id = e.target.dataset && e.target.dataset.subDel;
+  if (id) delSub(id);
+});
 $('#btn-add').addEventListener('click', addTarget);
 $('#new-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTarget(); });
 $('#btn-run').addEventListener('click', () => runChecks($('#via').value));

@@ -78,3 +78,8 @@ a:hover { text-decoration: underline; }
 .trend-box { overflow-x: auto; }
 .trend-head { font-size: 13px; color: var(--ink); margin-bottom: 8px; }
 .trend-svg { width: 100%; min-width: 480px; height: auto; display: block; background: #fff; }
+
+/* 订阅清单 */
+.w-nodes { width: 70px; }
+.sub-cell { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-cell .sub-note { color: var(--sub); font-size: 12px; margin-left: 6px; }

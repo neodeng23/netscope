@@ -274,15 +274,23 @@ func (jm *jobManager) Get(id string) *checkJob {
 
 type serveDeps struct {
 	targets   *targetStore
+	subs      *subStore
 	jobs      *jobManager
 	reportDir string
 	token     string
 	timeout   time.Duration
 	conc      int
 	nodes     func() []Tunnel
+	reload    func() // 订阅变更后触发重新加载
 }
 
 func buildMux(d serveDeps) *http.ServeMux {
+	if d.subs == nil {
+		d.subs = &subStore{} // 未提供订阅清单时兜底(仅测试场景)
+	}
+	if d.nodes == nil {
+		d.nodes = func() []Tunnel { return nil }
+	}
 	mux := http.NewServeMux()
 
 	auth := func(next http.Handler) http.Handler {
@@ -340,11 +348,46 @@ func buildMux(d serveDeps) *http.ServeMux {
 		reports, _ := listReports(d.reportDir)
 		writeJSON(w, map[string]any{
 			"targets": d.targets.All(),
+			"subs":    d.subs.All(),
 			"groups":  d.targets.Groups(),
 			"nodes":   nodeList,
 			"reports": reports,
 		})
 	})))
+
+	subsHandler := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			var req struct{ URL, Note string }
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || strings.TrimSpace(req.URL) == "" {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			sub, added, err := d.subs.Add(strings.TrimSpace(req.URL), req.Note)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if added && d.reload != nil {
+				go d.reload()
+			}
+			writeJSON(w, map[string]any{"sub": sub, "added": added})
+		case "DELETE":
+			id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/subs"), "/")
+			if id == "" || !d.subs.Remove(id) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			if d.reload != nil {
+				go d.reload()
+			}
+			writeJSON(w, map[string]bool{"ok": true})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.Handle("/api/subs", subsHandler)
+	mux.Handle("/api/subs/", subsHandler)
 
 	targetsHandler := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		suffix := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/targets"), "/")
@@ -484,7 +527,7 @@ func buildMux(d serveDeps) *http.ServeMux {
 func cmdServe(ctx context.Context, args []string) int {
 	fs := newFlagSet("serve")
 	listen := fs.String("listen", orDefault(appConfig.Serve.Listen, "0.0.0.0:8420"), "监听地址")
-	sub := fs.String("sub", "", "可选：订阅，加载后网页上可选择经节点检测")
+	sub := fs.String("sub", "", "可选：订阅（写入订阅清单，网页上可管理多个）")
 	token := fs.String("token", appConfig.Serve.Token, "可选：访问令牌（为空则不鉴权）")
 	reportDir := fs.String("report-dir", orDefault(appConfig.Serve.ReportDir, defaultReportDir()), "报告目录")
 	targetsPath := fs.String("targets", orDefault(appConfig.Serve.TargetsFile, defaultTargetsPath()), "地址清单存储路径")
@@ -497,38 +540,34 @@ func cmdServe(ctx context.Context, args []string) int {
 	if err != nil {
 		fatalf("读取地址清单失败: %v", err)
 	}
+	subs, err := loadSubs(orDefault(appConfig.Serve.SubsFile, defaultSubsPath()))
+	if err != nil {
+		fatalf("读取订阅清单失败: %v", err)
+	}
 	_ = os.MkdirAll(*reportDir, 0o755)
 
-	// 可选加载节点（异步，不阻塞启动）
-	var nodesMu sync.Mutex
-	var nodes []Tunnel
-	loadNodes := func() []Tunnel {
-		nodesMu.Lock()
-		defer nodesMu.Unlock()
-		return nodes
-	}
+	// --sub 作为初始订阅写入清单（按 URL 去重）
 	if *sub != "" {
-		go func() {
-			ns, err := LoadTunnelsFromFile(ctx, *sub)
-			nodesMu.Lock()
-			if err != nil {
-				Progress("订阅加载失败: %v（仅可用直连检测）\n", err)
-			} else {
-				nodes = ns
-				Progress("订阅已加载：%d 个节点可选用\n", len(ns))
-			}
-			nodesMu.Unlock()
-		}()
+		if _, added, err := subs.Add(*sub, ""); err != nil {
+			Progress("订阅写入失败: %v\n", err)
+		} else if added {
+			Progress("已添加订阅：%s\n", *sub)
+		}
 	}
+
+	loader := newNodeLoader(subs)
+	go loader.Reload(ctx)
 
 	mux := buildMux(serveDeps{
 		targets:   targets,
+		subs:      subs,
 		jobs:      newJobManager(),
 		reportDir: *reportDir,
 		token:     *token,
 		timeout:   timeoutFlag.Duration,
 		conc:      *conc,
-		nodes:     loadNodes,
+		nodes:     loader.Get,
+		reload:    func() { loader.Reload(ctx) },
 	})
 
 	srv := &http.Server{Addr: *listen, Handler: mux}
@@ -540,7 +579,7 @@ func cmdServe(ctx context.Context, args []string) int {
 	for _, u := range listenURLs(ln, *token) {
 		fmt.Printf("   %s\n", u)
 	}
-	fmt.Printf("   报告目录: %s\n   地址清单: %s\n   Ctrl-C 停止\n", *reportDir, *targetsPath)
+	fmt.Printf("   报告目录: %s\n   地址清单: %s\n   订阅清单: %s（共 %d 条）\n   Ctrl-C 停止\n", *reportDir, *targetsPath, subs.path, len(subs.All()))
 	go func() {
 		<-ctx.Done()
 		shCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

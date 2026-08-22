@@ -21,6 +21,21 @@
 
 <main>
   <section class="card">
+    <h2>📡 Clash 订阅 <span id="subs-progress" class="progress"></span></h2>
+    <div class="add-row">
+      <input id="new-sub" type="text" placeholder="订阅链接或本地 Clash YAML / v2ray 文件路径，可添加多个" spellcheck="false">
+      <button id="btn-sub-add">＋ 添加</button>
+    </div>
+    <table id="subs" class="grid">
+      <thead><tr>
+        <th>订阅</th><th class="w-nodes">节点</th><th>添加时间</th><th class="w-op">操作</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="subs-tip" class="tip" hidden>还没有订阅，添加后检测通道里就能选择各节点（支持多个，自动去重）</div>
+  </section>
+
+  <section class="card">
     <h2>📍 地址清单
       <span class="spacer"></span>
       <label class="mini">分组

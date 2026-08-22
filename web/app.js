@@ -86,6 +86,7 @@ function renderResults(job) {
   } else {
     p.textContent = `检测中 ${job.done}/${job.total} · ${job.via}`;
   }
+  renderResultNotes(job);
 }
 
 
@@ -245,6 +246,53 @@ async function runChecks(via) {
     $('#btn-run').disabled = false;
     $('#btn-run-all').disabled = false;
   }
+}
+
+// ---------- 结果说明 ----------
+
+// 常见异常状态码解释（仅对本次结果里出现过的展示）
+const STATUS_EXPLAIN = {
+  400: '请求错误：服务器认为请求本身有问题，普通 GET 检测很少见，多为站点接口限制',
+  401: '未授权：需要登录/鉴权才能看，网络与出口都是通的',
+  403: '被拒绝：最常见是 Cloudflare 等防护在拦截——出口 IP 被风控（机房/代理 IP 信誉差）或指纹不像真人浏览器。换一个节点通道常常就能过（不同出口 IP 信誉不同）',
+  404: '页面不存在：域名和路径都通了，只是这个地址没有内容，不代表站点不可达',
+  405: '方法不允许：站点拒绝 GET 请求，少见',
+  408: '请求超时：服务器收到请求但处理太慢',
+  418: "I'm a teapot：站点反爬彩蛋，网络是通的",
+  421: '请求导向错误（Misdirected Request）：连接被复用/导向到了错误的服务节点，SNI 或 CDN 调度不匹配。OpenAI 等站点对「看起来不对」的来源也常回 421；换个节点通道或稍后重试一般可解',
+  429: '请求过多：触发了速率限制，IP 被临时限流，过段时间或换通道再试',
+  451: '因法律原因拒绝：地区性封锁（如 GDPR 或内容审查），该出口 IP 所在地区不被允许访问',
+  500: '服务器内部错误：站点自己的问题，与你的链路无关',
+  502: '网关错误：站点后端服务故障或网关异常',
+  503: '服务不可用：站点过载/维护，部分是防护的人机验证页（浏览器打开可能正常）',
+  504: '网关超时：站点后端响应超时',
+  521: 'Cloudflare 521：源站拒绝连接，网站自己的服务器离线',
+  522: 'Cloudflare 522：连接源站超时',
+  523: 'Cloudflare 523：源站不可达',
+  525: 'Cloudflare 525：与源站的 SSL 握手失败',
+};
+
+function explainStatus(code) {
+  if (STATUS_EXPLAIN[code]) return STATUS_EXPLAIN[code];
+  if (code >= 400 && code < 500) return '客户端侧错误（4xx）：网络是通的，请求被服务方拒绝';
+  if (code >= 500) return '服务端错误（5xx）：站点自身异常，与链路无关';
+  return '';
+}
+
+function renderResultNotes(job) {
+  const box = $('#result-notes');
+  const seen = new Set();
+  for (const it of job.items) {
+    const r = it.result;
+    if (r && !r.ok && r.status) seen.add(r.status);
+  }
+  const codes = [...seen].sort((a, b) => a - b);
+  if (codes.length === 0) { box.hidden = true; box.innerHTML = ''; return; }
+  const lines = codes.map((c) => `<div class="note-line"><b>HTTP ${c}</b> — ${explainStatus(c)}</div>`);
+  box.innerHTML = `
+    <div class="note-line legend">图例：✅ 可访问（2xx/3xx） · 🟡 网络可达但被拒（内容层拦截） · ❌ 网络不可达（建连/超时失败）</div>
+    ${lines.join('')}`;
+  box.hidden = false;
 }
 
 // ---------- 本机网络体检 ----------

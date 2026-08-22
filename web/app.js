@@ -477,15 +477,30 @@ function gameRowCells(platform, r, node) {
   };
 }
 
-// 游戏全节点任务状态:polling 独立于普通检测,避免互相覆盖导致渲染交错
-let gameAll = { id: null, order: null, polling: null };
+// 游戏全节点任务状态:polling 独立于普通检测;lastJob 供点击列头后即时重渲染
+let gameAll = { id: null, polling: null, lastJob: null };
+// 每个平台各自的列头排序状态(null=默认任务顺序,即订阅顺序)
+const gameSort = { steam: { key: null, dir: 1 }, psn: { key: null, dir: 1 } };
+
+// 站点排序值:✅=0 🟡=1 ❌=2 未完成=3(未完成恒排末尾)
+const siteRank = (st) => (!st ? 3 : st.ok ? 0 : (st.reachable && st.status) ? 1 : 2);
+
+function gameSortVal(row, key) {
+  const r = row.r;
+  switch (key) {
+    case 'node': return { s: row.node };
+    case 'ms': return { n: row.ms ?? 1e9 };
+    case 'region': return { s: r ? String(r.currency || r.region || r.storefront || '') : '' };
+    case 'store': return { n: siteRank(r && r.store) };
+    case 'community': return { n: siteRank(r && r.community) };
+    case 'account': return { n: siteRank(r && r.account) };
+    case 'web': return { n: siteRank(r && r.web) };
+  }
+  return null;
+}
 
 function renderGameJob(job) {
-  // 新任务:重置锁序(首帧捕获完整节点顺序,任务创建即含全部节点)
-  if (gameAll.id !== job.id) {
-    gameAll.id = job.id;
-    gameAll.order = null;
-  }
+  gameAll.lastJob = job;
   const byPlatform = { steam: [], psn: [] };
   for (const it of job.items) {
     byPlatform[it.platform === 'steam' ? 'steam' : 'psn'].push(it);
@@ -493,35 +508,28 @@ function renderGameJob(job) {
   for (const platform of ['steam', 'psn']) {
     const items = byPlatform[platform];
     const rows = items.map((it) => ({ node: it.node, r: it.result, ...gameRowCells(platform, it.result, it.node) }));
-    const rowByNode = new Map(rows.map((r) => [r.node, r]));
-    // 行序与矩阵视图同一套逻辑:节点序去重后首帧锁定;完成时按 全通优先+平均延迟 排序一次
-    let nodeNames = [...new Set(items.map((it) => it.node))];
-    const orderValid = gameAll.order && gameAll.order.length === nodeNames.length
-      && gameAll.order.every((n) => rowByNode.has(n));
-    if (job.finished || !orderValid) {
-      const base = orderValid ? gameAll.order : nodeNames;
-      if (job.finished) {
-        nodeNames = base.slice().sort((a, b) => {
-          const ra = rowByNode.get(a), rb = rowByNode.get(b);
-          return (Number(rb.ok) - Number(ra.ok)) || ((ra.ms ?? 1e9) - (rb.ms ?? 1e9));
-        });
-      } else {
-        nodeNames = base;
-      }
-      gameAll.order = nodeNames.slice();
-    } else {
-      nodeNames = gameAll.order;
+    // 默认任务顺序(订阅顺序,天然稳定,检测中/完成后都不动);点列头后按该列排序并跨轮询保持
+    let ordered = rows;
+    const sort = gameSort[platform];
+    if (sort.key) {
+      ordered = rows.slice().sort((a, b) => {
+        const va = gameSortVal(a, sort.key);
+        const vb = gameSortVal(b, sort.key);
+        if (va.s !== undefined || vb.s !== undefined) {
+          return String(va.s ?? '').localeCompare(String(vb.s ?? ''), 'zh') * sort.dir;
+        }
+        return ((va.n ?? 1e9) - (vb.n ?? 1e9)) * sort.dir;
+      });
     }
-    const ordered = nodeNames.map((n) => rowByNode.get(n)).filter(Boolean);
+    const arrow = (key) => (sort.key === key ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
     const head = platform === 'steam'
-      ? '<tr><th>节点</th><th>商店</th><th>社区</th><th>货币区</th><th>延迟</th></tr>'
-      : '<tr><th>节点</th><th>商店</th><th>账户</th><th>官网</th><th>区域</th><th>延迟</th></tr>';
+      ? `<tr><th class="sortable" data-gsort="node">节点${arrow('node')}</th><th class="sortable" data-gsort="store">商店${arrow('store')}</th><th class="sortable" data-gsort="community">社区${arrow('community')}</th><th class="sortable" data-gsort="region">货币区${arrow('region')}</th><th class="sortable" data-gsort="ms">延迟${arrow('ms')}</th></tr>`
+      : `<tr><th class="sortable" data-gsort="node">节点${arrow('node')}</th><th class="sortable" data-gsort="store">商店${arrow('store')}</th><th class="sortable" data-gsort="account">账户${arrow('account')}</th><th class="sortable" data-gsort="web">官网${arrow('web')}</th><th class="sortable" data-gsort="region">区域${arrow('region')}</th><th class="sortable" data-gsort="ms">延迟${arrow('ms')}</th></tr>`;
     const body = ordered.map((r) => `<tr>${r.cells}</tr>`).join('');
     const done = items.filter((it) => it.result).length;
     const full = rows.filter((r) => r.ok).length;
-    const orderNote = job.finished ? '已按 全通优先·平均延迟升序 排列' : '行序检测中锁定';
     $(`#${platform}-box`).innerHTML = `
-      <div class="game-summary">已完成 ${done}/${items.length} · 全通 ${full} 个 · ${orderNote}</div>
+      <div class="game-summary">已完成 ${done}/${items.length} · 全通 ${full} 个 · 点击列头排序</div>
       <div class="game-scroll"><table class="game-grid-tbl"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
   }
   $('#game-progress').textContent = job.finished ? `完成 ${job.done}/${job.total}` : `${job.done}/${job.total}`;
@@ -534,7 +542,7 @@ async function runGameAll() {
   if (gameAll.polling) { clearInterval(gameAll.polling); gameAll.polling = null; }
   try {
     const { id } = await api('/api/game/all', { method: 'POST' });
-    gameAll = { id, order: null, polling: null };
+    gameAll = { id, polling: null };
     gameAll.polling = setInterval(async () => {
       let job;
       try {
@@ -749,6 +757,16 @@ refresh().catch((e) => {
   $('#result-tip').textContent = '加载失败：' + e.message + '（如配置了 --token，需在 URL 加 ?token=xxx）';
 });
 $('#btn-steam').addEventListener('click', () => runGame('steam'));
+['steam', 'psn'].forEach((p) => {
+  $(`#${p}-box`).addEventListener('click', (e) => {
+    const th = e.target.closest && e.target.closest('th[data-gsort]');
+    if (!th) return;
+    const st = gameSort[p];
+    if (st.key === th.dataset.gsort) st.dir *= -1;
+    else { st.key = th.dataset.gsort; st.dir = 1; }
+    if (gameAll.lastJob) renderGameJob(gameAll.lastJob);
+  });
+});
 $('#btn-psn').addEventListener('click', () => runGame('psn'));
 $('#btn-game-all').addEventListener('click', runGameAll);
 $('#btn-local').addEventListener('click', runLocal);

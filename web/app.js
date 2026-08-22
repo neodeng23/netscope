@@ -1,7 +1,7 @@
 // netscope 体检台前端（无构建链，原生 JS）
 // 所有检测都由按钮触发：单通道检测 / 全节点对比 / 趋势图均一次点击一次执行。
 const $ = (s) => document.querySelector(s);
-const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null, matrixSort: 'pass', lastJob: null, lastJobId: null, matrixOrder: null };
+const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null, matrixSort: { key: 'pass', dir: -1 }, flatSort: { key: null, dir: -1 }, lastJob: null, lastJobId: null, matrixOrder: null };
 
 // ---------- API ----------
 
@@ -70,6 +70,36 @@ function renderResult(item, withNode) {
   return tr;
 }
 
+function flatRank(r) {
+  if (!r) return 3;
+  if (r.ok) return 0;
+  if (r.reachable) return 1;
+  return 2;
+}
+
+function flatSortedItems(items) {
+  const fs = state.flatSort;
+  if (!fs.key) return items;
+  const val = (it) => {
+    const r = it.result;
+    if (!r) return null;
+    switch (fs.key) {
+      case 'ok': return flatRank(r);
+      case 'code': return r.status || 1e9;
+      case 'total': return r.totalMs || 1e9;
+      case 'conn': return r.connMs || 1e9;
+    }
+    return null;
+  };
+  return items.slice().sort((a, b) => {
+    const va = val(a), vb = val(b);
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    return (va - vb) * fs.dir;
+  });
+}
+
 function isAllNodeJob(job) {
   return job.via && job.via.startsWith('全部节点');
 }
@@ -88,7 +118,9 @@ function renderResults(job) {
   const tb = $('#results tbody');
   tb.innerHTML = '';
   $('#result-tip').hidden = true;
-  for (const item of job.items) tb.appendChild(renderResult(item, withNode));
+  const items = flatSortedItems(job.items);
+  updateFlatArrows();
+  for (const item of items) tb.appendChild(renderResult(item, withNode));
   const p = $('#progress');
   if (job.finished) {
     p.textContent = `完成：${job.done}/${job.total} · ${job.via}`;
@@ -283,8 +315,6 @@ function renderMatrix(job, forceSort = false) {
   $('#result-tip').hidden = true;
   const box = $('#matrix-box');
   box.hidden = false;
-  $('#sort-pass').classList.toggle('active', state.matrixSort === 'pass');
-  $('#sort-latency').classList.toggle('active', state.matrixSort === 'latency');
 
   // 地址列(保序去重)与节点行
   const urls = [...new Set(job.items.map((it) => it.url))];
@@ -301,15 +331,17 @@ function renderMatrix(job, forceSort = false) {
   }
 
   let nodeNames = [...rows.keys()];
+  const ms = state.matrixSort;
   const sorter = {
     pass: (a, b) => {
       const ra = rows.get(a), rb = rows.get(b);
-      return (rb.ok - ra.ok) || ((ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9));
+      return ((rb.ok - ra.ok) || ((ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9))) * ms.dir * -1;
     },
     latency: (a, b) => {
       const ra = rows.get(a), rb = rows.get(b);
-      return (ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9);
+      return ((ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9)) * ms.dir;
     },
+    node: (a, b) => a.localeCompare(b, 'zh') * ms.dir,
   };
   // 行序稳定性:进行中锁定首次出现的顺序(订阅顺序),避免结果陆续到达时节点行上下跳;
   // 任务完成或用户点击排序时才重排。
@@ -318,7 +350,7 @@ function renderMatrix(job, forceSort = false) {
   if (forceSort || job.finished || !orderValid) {
     const base = orderValid ? state.matrixOrder : nodeNames;
     if (forceSort || job.finished) {
-      nodeNames = base.slice().sort(sorter[state.matrixSort] || sorter.pass);
+      nodeNames = base.slice().sort(sorter[ms.key] || sorter.pass);
     } else {
       nodeNames = base;
     }
@@ -338,8 +370,9 @@ function renderMatrix(job, forceSort = false) {
     return `<tr class="${grade}"><td class="m-node" title="${escapeHTML(name)}">${escapeHTML(name)}</td>${cells}<td class="m-rate">${rate}</td><td class="m-avg">${avg}</td></tr>`;
   }).join('');
 
+  const arrow = (key) => ms.key === key ? (ms.dir === 1 ? ' ▲' : ' ▼') : '';
   $('#matrix').innerHTML = `
-    <thead><tr><th class="m-node">节点</th>${head}<th>通过</th><th>平均延迟</th></tr></thead>
+    <thead><tr><th class="m-node sortable" data-msort="node">节点${arrow('node')}</th>${head}<th class="sortable" data-msort="pass">通过${arrow('pass')}</th><th class="sortable" data-msort="latency">平均延迟${arrow('latency')}</th></tr></thead>
     <tbody>${body}</tbody>`;
 
   const done = job.items.filter((it) => it.result).length;
@@ -540,8 +573,32 @@ refresh().catch((e) => {
   $('#result-tip').textContent = '加载失败：' + e.message + '（如配置了 --token，需在 URL 加 ?token=xxx）';
 });
 $('#btn-local').addEventListener('click', runLocal);
-$('#sort-pass').addEventListener('click', () => { state.matrixSort = 'pass'; rerenderMatrix(); });
-$('#sort-latency').addEventListener('click', () => { state.matrixSort = 'latency'; rerenderMatrix(); });
 function rerenderMatrix() {
   if (state.lastJob && isAllNodeJob(state.lastJob)) renderMatrix(state.lastJob, true);
+}
+$('#matrix').addEventListener('click', (e) => {
+  const key = e.target.dataset && e.target.dataset.msort;
+  if (!key) return;
+  const ms = state.matrixSort;
+  const defaults = { pass: -1, latency: 1, node: 1 }; // 首次点击的默认方向
+  if (ms.key === key) ms.dir *= -1;
+  else { ms.key = key; ms.dir = defaults[key] || 1; }
+  rerenderMatrix();
+});
+$('#results').addEventListener('click', (e) => {
+  const key = e.target.dataset && e.target.dataset.key;
+  if (!key) return;
+  const fs = state.flatSort;
+  const defaults = { ok: -1, code: 1, total: 1, conn: 1 };
+  if (fs.key === key) fs.dir *= -1;
+  else { fs.key = key; fs.dir = defaults[key] || 1; }
+  updateFlatArrows();
+  if (state.lastJob && !isAllNodeJob(state.lastJob)) renderResults(state.lastJob);
+});
+function updateFlatArrows() {
+  const fs = state.flatSort;
+  document.querySelectorAll('#results thead th.sortable').forEach((th) => {
+    const label = th.textContent.replace(/ [▲▼]$/, '');
+    th.textContent = label + (th.dataset.key === fs.key ? (fs.dir === 1 ? ' ▲' : ' ▼') : '');
+  });
 }

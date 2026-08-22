@@ -81,15 +81,18 @@
     <h2>🧪 检测结果 <span id="progress" class="progress"></span></h2>
     <table id="results" class="grid" hidden>
       <thead><tr>
-        <th>地址</th><th id="th-node" hidden>节点</th><th>状态</th><th>状态码</th><th>总耗时</th><th>建连</th><th>出口IP</th><th>归属地</th><th>说明</th>
+        <th>地址</th><th id="th-node" hidden>节点</th>
+        <th class="sortable" data-key="ok">状态</th>
+        <th class="sortable" data-key="code">状态码</th>
+        <th class="sortable" data-key="total">总耗时</th>
+        <th class="sortable" data-key="conn">建连</th>
+        <th>出口IP</th><th>归属地</th><th>说明</th>
       </tr></thead>
       <tbody></tbody>
     </table>
     <div id="matrix-box" hidden>
       <div class="matrix-toolbar">
-        排序：
-        <button id="sort-pass" class="mini-btn">通过数</button>
-        <button id="sort-latency" class="mini-btn">平均延迟</button>
+        点击列头排序（节点 / 通过 / 平均延迟，再点切换升降序）
         <span id="matrix-summary" class="progress"></span>
       </div>
       <div class="matrix-wrap"><table class="matrix" id="matrix"></table></div>

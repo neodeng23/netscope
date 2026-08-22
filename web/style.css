@@ -159,3 +159,7 @@ table.matrix tr.row-full td.m-rate { color: var(--ok); }
 table.matrix tr.row-part td.m-rate { color: #b45309; }
 table.matrix tr.row-none td.m-rate { color: var(--bad); }
 table.matrix tbody tr:hover td { filter: brightness(.96); }
+
+/* 可排序列头 */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--blue); }

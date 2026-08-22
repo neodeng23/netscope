@@ -132,3 +132,30 @@ a:hover { text-decoration: underline; }
 .notes .note-line { padding: 3px 0; line-height: 1.55; }
 .notes b { color: var(--ink); font-weight: 600; }
 .notes .legend { padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px dashed var(--line); }
+
+/* 全节点对比矩阵 */
+.matrix-toolbar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sub); margin-bottom: 10px; }
+.matrix-toolbar .mini-btn.active { border-color: var(--blue); color: var(--blue); background: #eff6ff; }
+.matrix-wrap { overflow: auto; max-height: 68vh; border: 1px solid var(--line); border-radius: 10px; }
+table.matrix { border-collapse: separate; border-spacing: 0; font-size: 12.5px; min-width: 100%; }
+table.matrix th, table.matrix td {
+  padding: 6px 10px; white-space: nowrap; border-bottom: 1px solid var(--line); border-right: 1px solid #f1f5f9;
+}
+table.matrix thead th {
+  position: sticky; top: 0; z-index: 2; background: #f8fafc; color: var(--sub); font-weight: 600; font-size: 12px;
+}
+table.matrix .m-node {
+  position: sticky; left: 0; z-index: 1; background: #fff; font-weight: 500; max-width: 190px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+table.matrix thead .m-node { z-index: 3; }
+table.matrix .m-url { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+table.matrix td.m-ok { background: #f0fdf4; color: var(--ok); font-weight: 600; }
+table.matrix td.m-warn { background: #fffbeb; color: #b45309; font-weight: 600; }
+table.matrix td.m-bad { background: #fef2f2; color: var(--bad); }
+table.matrix td.m-run { color: #94a3b8; }
+table.matrix td.m-rate, table.matrix td.m-avg { font-weight: 600; }
+table.matrix tr.row-full td.m-rate { color: var(--ok); }
+table.matrix tr.row-part td.m-rate { color: #b45309; }
+table.matrix tr.row-none td.m-rate { color: var(--bad); }
+table.matrix tbody tr:hover td { filter: brightness(.96); }

@@ -1,7 +1,7 @@
 // netscope 体检台前端（无构建链，原生 JS）
 // 所有检测都由按钮触发：单通道检测 / 全节点对比 / 趋势图均一次点击一次执行。
 const $ = (s) => document.querySelector(s);
-const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null };
+const state = { targets: [], subs: [], nodes: [], groups: [], polling: null, subPolling: null, matrixSort: 'pass', lastJob: null };
 
 // ---------- API ----------
 
@@ -70,7 +70,15 @@ function renderResult(item, withNode) {
   return tr;
 }
 
+function isAllNodeJob(job) {
+  return job.via && job.via.startsWith('全部节点');
+}
+
 function renderResults(job) {
+  state.lastJob = job;
+  if (isAllNodeJob(job)) { renderMatrix(job); return; }
+  $('#matrix-box').hidden = true;
+  $('#results').hidden = false;
   const withNode = job.items.some((it) => it.node);
   $('#th-node').hidden = !withNode;
   const tb = $('#results tbody');
@@ -246,6 +254,79 @@ async function runChecks(via) {
     $('#btn-run').disabled = false;
     $('#btn-run-all').disabled = false;
   }
+}
+
+// ---------- 全节点对比矩阵 ----------
+
+function cellTitle(r) {
+  if (!r) return '等待检测';
+  const parts = [`状态码: ${r.status || '-'}`, `总耗时: ${r.totalMs ? r.totalMs.toFixed(1) + 'ms' : '-'}`, `建连: ${r.connMs ? r.connMs.toFixed(1) + 'ms' : '-'}`];
+  if (r.exitIp) parts.push(`出口: ${r.exitIp} ${r.location || ''}${r.ipFlags ? '（' + r.ipFlags + '）' : ''}`);
+  if (r.err) parts.push(`错误: ${r.err}`);
+  return parts.join('\n');
+}
+
+function matrixCell(r) {
+  if (!r) return '<td class="m-run">…</td>';
+  const tip = cellTitle(r).replace(/"/g, '&quot;');
+  if (r.ok) return `<td class="m-ok" title="${tip}">✅ ${r.totalMs ? Math.round(r.totalMs) : ''}</td>`;
+  if (r.reachable && r.status) return `<td class="m-warn" title="${tip}">🟡 ${r.status}</td>`;
+  return `<td class="m-bad" title="${tip}">❌</td>`;
+}
+
+function renderMatrix(job) {
+  $('#results').hidden = true;
+  $('#result-tip').hidden = true;
+  const box = $('#matrix-box');
+  box.hidden = false;
+  $('#sort-pass').classList.toggle('active', state.matrixSort === 'pass');
+  $('#sort-latency').classList.toggle('active', state.matrixSort === 'latency');
+
+  // 地址列(保序去重)与节点行
+  const urls = [...new Set(job.items.map((it) => it.url))];
+  const rows = new Map(); // node -> {cells: Map(url->result), done, ok, sumMs, n}
+  for (const it of job.items) {
+    if (!rows.has(it.node)) rows.set(it.node, { cells: new Map(), ok: 0, reachable: 0, sumMs: 0, n: 0, done: 0 });
+    const row = rows.get(it.node);
+    row.cells.set(it.url, it.result);
+    if (it.result) {
+      row.done++;
+      if (it.result.ok) { row.ok++; row.sumMs += it.result.totalMs || 0; row.n++; }
+      else if (it.result.reachable) row.reachable++;
+    }
+  }
+
+  const nodeNames = [...rows.keys()];
+  const sorter = {
+    pass: (a, b) => {
+      const ra = rows.get(a), rb = rows.get(b);
+      return (rb.ok - ra.ok) || ((ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9));
+    },
+    latency: (a, b) => {
+      const ra = rows.get(a), rb = rows.get(b);
+      return (ra.n ? ra.sumMs / ra.n : 1e9) - (rb.n ? rb.sumMs / rb.n : 1e9);
+    },
+  };
+  nodeNames.sort(sorter[state.matrixSort] || sorter.pass);
+
+  const shortUrl = (u) => u.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const head = urls.map((u) => `<th class="m-url" title="${escapeHTML(u)}">${escapeHTML(shortUrl(u))}</th>`).join('');
+  const body = nodeNames.map((name) => {
+    const row = rows.get(name);
+    const avg = row.n ? (row.sumMs / row.n).toFixed(0) + 'ms' : '-';
+    const rate = row.ok + row.reachable > 0 ? `${row.ok}/${urls.length}` : `${row.ok}/${urls.length}`;
+    const grade = row.ok === urls.length ? 'row-full' : row.ok + row.reachable > 0 ? 'row-part' : 'row-none';
+    const cells = urls.map((u) => matrixCell(row.cells.get(u))).join('');
+    return `<tr class="${grade}"><td class="m-node" title="${escapeHTML(name)}">${escapeHTML(name)}</td>${cells}<td class="m-rate">${rate}</td><td class="m-avg">${avg}</td></tr>`;
+  }).join('');
+
+  $('#matrix').innerHTML = `
+    <thead><tr><th class="m-node">节点</th>${head}<th>通过</th><th>平均延迟</th></tr></thead>
+    <tbody>${body}</tbody>`;
+
+  const done = job.items.filter((it) => it.result).length;
+  const full = nodeNames.filter((n) => rows.get(n).ok === urls.length).length;
+  $('#matrix-summary').textContent = `${nodeNames.length} 节点 × ${urls.length} 地址 · 已完成 ${done}/${job.items.length} · 全通过 ${full} 个`;
 }
 
 // ---------- 结果说明 ----------
@@ -441,3 +522,8 @@ refresh().catch((e) => {
   $('#result-tip').textContent = '加载失败：' + e.message + '（如配置了 --token，需在 URL 加 ?token=xxx）';
 });
 $('#btn-local').addEventListener('click', runLocal);
+$('#sort-pass').addEventListener('click', () => { state.matrixSort = 'pass'; rerenderMatrix(); });
+$('#sort-latency').addEventListener('click', () => { state.matrixSort = 'latency'; rerenderMatrix(); });
+function rerenderMatrix() {
+  if (state.lastJob && isAllNodeJob(state.lastJob)) renderMatrix(state.lastJob);
+}

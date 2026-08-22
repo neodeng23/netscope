@@ -79,12 +79,21 @@
 
   <section class="card">
     <h2>🧪 检测结果 <span id="progress" class="progress"></span></h2>
-    <table id="results" class="grid">
+    <table id="results" class="grid" hidden>
       <thead><tr>
         <th>地址</th><th id="th-node" hidden>节点</th><th>状态</th><th>状态码</th><th>总耗时</th><th>建连</th><th>出口IP</th><th>归属地</th><th>说明</th>
       </tr></thead>
       <tbody></tbody>
     </table>
+    <div id="matrix-box" hidden>
+      <div class="matrix-toolbar">
+        排序：
+        <button id="sort-pass" class="mini-btn">通过数</button>
+        <button id="sort-latency" class="mini-btn">平均延迟</button>
+        <span id="matrix-summary" class="progress"></span>
+      </div>
+      <div class="matrix-wrap"><table class="matrix" id="matrix"></table></div>
+    </div>
     <div id="result-notes" class="notes" hidden></div>
     <div id="result-tip" class="tip">勾选地址后点「开始检测」或「全节点对比」</div>
   </section>

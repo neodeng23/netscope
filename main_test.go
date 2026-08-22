@@ -140,13 +140,13 @@ func TestDNSCodec(t *testing.T) {
 	}
 	// 构造一个响应：header + question + 1 个 A 记录
 	resp := append([]byte{}, q[:12]...)
-	resp[2] = 0x81 // QR=1
-	resp[6], resp[7] = 0, 1 // ANCOUNT
-	resp = append(resp, q[12:]...) // question 原样
-	resp = append(resp, 0xc0, 0x0c) // name 指针
-	resp = append(resp, 0, 1, 0, 1) // A IN
-	resp = append(resp, 0, 0, 0, 60) // TTL
-	resp = append(resp, 0, 4) // RDLENGTH
+	resp[2] = 0x81                        // QR=1
+	resp[6], resp[7] = 0, 1               // ANCOUNT
+	resp = append(resp, q[12:]...)        // question 原样
+	resp = append(resp, 0xc0, 0x0c)       // name 指针
+	resp = append(resp, 0, 1, 0, 1)       // A IN
+	resp = append(resp, 0, 0, 0, 60)      // TTL
+	resp = append(resp, 0, 4)             // RDLENGTH
 	resp = append(resp, 93, 184, 216, 34) // 93.184.216.34
 	addrs, ttl := parseDNSAnswers(resp)
 	if len(addrs) != 1 || addrs[0] != "93.184.216.34" || ttl != 60 {
@@ -338,11 +338,11 @@ func TestServeAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(buildMux(serveDeps{
-		targets:   ts,
-		jobs:      newJobManager(),
-		timeout:   2 * time.Second,
-		conc:      2,
-		nodes:     func() []Tunnel { return nil },
+		targets: ts,
+		jobs:    newJobManager(),
+		timeout: 2 * time.Second,
+		conc:    2,
+		nodes:   func() []Tunnel { return nil },
 	}))
 	defer srv.Close()
 
@@ -363,8 +363,8 @@ func TestServeAPI(t *testing.T) {
 	// state
 	resp, _ := http.Get(srv.URL + "/api/state")
 	var st struct {
-		Targets []Target         `json:"targets"`
-		Reports []map[string]any `json:"reports"`
+		Targets []Target            `json:"targets"`
+		Reports []map[string]any    `json:"reports"`
 		Nodes   []map[string]string `json:"nodes"`
 	}
 	json.NewDecoder(resp.Body).Decode(&st)

@@ -13,13 +13,13 @@ import (
 // Linux：UDP socket 开 IP_RECVERR，从 errqueue 读 ICMP 差错（无需 root）。
 
 type sockExtendedErr struct {
-	Errno    uint32
-	Origin   uint8
-	Type     uint8
-	Code     uint8
-	Pad      uint8
-	Info     uint32
-	Data     uint32
+	Errno  uint32
+	Origin uint8
+	Type   uint8
+	Code   uint8
+	Pad    uint8
+	Info   uint32
+	Data   uint32
 }
 
 const (

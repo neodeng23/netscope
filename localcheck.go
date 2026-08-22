@@ -25,20 +25,20 @@ type SiteCheck struct {
 
 // Perspective 是一个视角（国内/国外）的体检结果。
 type Perspective struct {
-	Label    string     `json:"label"`
-	IP       string     `json:"ip,omitempty"`
-	Location string     `json:"location,omitempty"`
-	ISP      string     `json:"isp,omitempty"`
-	Flags    string     `json:"flags,omitempty"` // 代理/机房/移动
-	Risk     int        `json:"risk"`            // 0-100，-1 未知
-	Err      string     `json:"err,omitempty"`
-	Ping     *PingStats `json:"ping,omitempty"`
+	Label    string      `json:"label"`
+	IP       string      `json:"ip,omitempty"`
+	Location string      `json:"location,omitempty"`
+	ISP      string      `json:"isp,omitempty"`
+	Flags    string      `json:"flags,omitempty"` // 代理/机房/移动
+	Risk     int         `json:"risk"`            // 0-100，-1 未知
+	Err      string      `json:"err,omitempty"`
+	Ping     *PingStats  `json:"ping,omitempty"`
 	Sites    []SiteCheck `json:"sites"`
 }
 
 // LocalCheckResult 是一次本机网络体检的完整结果。
 type LocalCheckResult struct {
-	Time     time.Time   `json:"time"`
+	Time     time.Time    `json:"time"`
 	Domestic *Perspective `json:"domestic"`
 	Foreign  *Perspective `json:"foreign"`
 	SameExit *bool        `json:"sameExit,omitempty"` // 两个视角出口是否一致
@@ -60,9 +60,9 @@ var (
 		{"GitHub", "https://github.com"},
 		{"Cloudflare", "https://www.cloudflare.com"},
 	}
-	localCNPingTarget    = "223.5.5.5:443"
+	localCNPingTarget     = "223.5.5.5:443"
 	localGlobalPingTarget = "1.1.1.1:443"
-	dnsPolluteDomain     = "www.google.com"
+	dnsPolluteDomain      = "www.google.com"
 )
 
 // RunLocalCheck 跑一次本机网络体检（约 5~15 秒，各项目并发）。

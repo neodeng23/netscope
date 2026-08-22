@@ -233,11 +233,11 @@ func TestServeAPIGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(buildMux(serveDeps{
-		targets:   ts,
-		jobs:      newJobManager(),
-		timeout:   2 * time.Second,
-		conc:      2,
-		nodes:     func() []Tunnel { return []Tunnel{Direct, namedTunnel{"节点甲"}} },
+		targets: ts,
+		jobs:    newJobManager(),
+		timeout: 2 * time.Second,
+		conc:    2,
+		nodes:   func() []Tunnel { return []Tunnel{Direct, namedTunnel{"节点甲"}} },
 	}))
 	defer srv.Close()
 

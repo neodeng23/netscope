@@ -449,7 +449,7 @@ async function runGame(platform) {
 
 // 全节点(两平台共用一次任务),按平台拆分渲染
 function gameRowCells(platform, r, node) {
-  if (!r) return { cells: `<td class="g-node" title="${escapeHTML(node)}">${escapeHTML(node)}</td><td colspan="4" class="gc-bad" style="color:#94a3b8">…</td>`, ok: false, ms: null, done: false };
+  if (!r) return { cells: `<td class="g-node" title="${escapeHTML(node)}">${escapeHTML(node)}</td><td colspan="${platform === 'steam' ? 4 : 5}" class="gc-bad" style="color:#94a3b8">…</td>`, ok: false, ms: null, done: false };
   if (platform === 'steam') {
     const ok = r.store && r.store.ok && r.community && r.community.ok;
     const ms = [r.store, r.community].filter((x) => x && x.totalMs).map((x) => x.totalMs);

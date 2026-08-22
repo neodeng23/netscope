@@ -146,13 +146,13 @@ func (s ipwhoSource) Lookup(ctx context.Context, t Tunnel, ip string) (*IPInfo, 
 		return nil, err
 	}
 	var v struct {
-		IP      string `json:"ip"`
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-		Country string `json:"country"`
-		Code    string `json:"country_code"`
-		Region  string `json:"region"`
-		City    string `json:"city"`
+		IP         string `json:"ip"`
+		Success    bool   `json:"success"`
+		Message    string `json:"message"`
+		Country    string `json:"country"`
+		Code       string `json:"country_code"`
+		Region     string `json:"region"`
+		City       string `json:"city"`
 		Connection struct {
 			ASN int    `json:"asn"`
 			Org string `json:"org"`

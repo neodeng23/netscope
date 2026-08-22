@@ -18,8 +18,8 @@ type Sub struct {
 	URL   string    `json:"url"`
 	Note  string    `json:"note,omitempty"`
 	Added time.Time `json:"added"`
-	Nodes int       `json:"nodes"`           // 最近一次加载到的节点数
-	Err   string    `json:"err,omitempty"`   // 最近一次加载错误
+	Nodes int       `json:"nodes"`         // 最近一次加载到的节点数
+	Err   string    `json:"err,omitempty"` // 最近一次加载错误
 }
 
 type subStore struct {

@@ -12,12 +12,12 @@ import (
 
 // SpeedResult 是经节点测速的结果。
 type SpeedResult struct {
-	Node       string  `json:"node"`
-	DownMbps   float64 `json:"downMbps"`
-	UpMbps     float64 `json:"upMbps,omitempty"`
-	BytesRead  int64   `json:"bytesRead"`
-	DurationS  float64 `json:"durationSec"`
-	Err        string  `json:"err,omitempty"`
+	Node      string  `json:"node"`
+	DownMbps  float64 `json:"downMbps"`
+	UpMbps    float64 `json:"upMbps,omitempty"`
+	BytesRead int64   `json:"bytesRead"`
+	DurationS float64 `json:"durationSec"`
+	Err       string  `json:"err,omitempty"`
 }
 
 const (
@@ -40,8 +40,8 @@ func MeasureSpeed(ctx context.Context, t Tunnel, maxBytes int64, maxDur time.Dur
 	defer cancel()
 
 	tr := &http.Transport{
-		DialContext:     t.DialContext,
-		DialTLSContext:  dialTLSVia(t, &tls.Config{NextProtos: []string{"h2", "http/1.1"}}),
+		DialContext:    t.DialContext,
+		DialTLSContext: dialTLSVia(t, &tls.Config{NextProtos: []string{"h2", "http/1.1"}}),
 	}
 	defer tr.CloseIdleConnections()
 

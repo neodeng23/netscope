@@ -5,27 +5,27 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
-	"strings"
 	"net/http"
 	"net/http/httptrace"
+	"strings"
 	"sync"
 	"time"
 )
 
 // CheckResult 是一次「经隧道访问目标 URL」的检测结果。
 type CheckResult struct {
-	Node     string  `json:"node"`     // 通道名（direct 或节点名）
-	NodeType string  `json:"nodeType"` // ss / vmess / direct ...
-	Target   string  `json:"target"`
-	OK        bool    `json:"ok"`       // 2xx/3xx
-	Reachable bool    `json:"reachable"` // 拿到任何 HTTP 响应(含 4xx/5xx)即网络可达
-	Status    int     `json:"status"`
-	ConnMs   float64 `json:"connMs"`   // 建连耗时（含 TLS）
-	TotalMs  float64 `json:"totalMs"`  // 完整请求耗时
-	Err      string  `json:"err,omitempty"`
-	ExitIP   string  `json:"exitIp,omitempty"`
-	Location string  `json:"location,omitempty"` // 出口归属地
-	IPFlags  string  `json:"ipFlags,omitempty"`  // 代理/机房标记
+	Node      string    `json:"node"`     // 通道名（direct 或节点名）
+	NodeType  string    `json:"nodeType"` // ss / vmess / direct ...
+	Target    string    `json:"target"`
+	OK        bool      `json:"ok"`        // 2xx/3xx
+	Reachable bool      `json:"reachable"` // 拿到任何 HTTP 响应(含 4xx/5xx)即网络可达
+	Status    int       `json:"status"`
+	ConnMs    float64   `json:"connMs"`  // 建连耗时（含 TLS）
+	TotalMs   float64   `json:"totalMs"` // 完整请求耗时
+	Err       string    `json:"err,omitempty"`
+	ExitIP    string    `json:"exitIp,omitempty"`
+	Location  string    `json:"location,omitempty"` // 出口归属地
+	IPFlags   string    `json:"ipFlags,omitempty"`  // 代理/机房标记
 	CheckedAt time.Time `json:"checkedAt"`
 }
 

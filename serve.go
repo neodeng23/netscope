@@ -126,6 +126,10 @@ func (t *targetStore) Import(items []Target) int {
 		if it.URL == "" || seen[it.URL] {
 			continue
 		}
+		// 与 Add 的校验对齐：仅接受 http/https 绝对地址
+		if !strings.HasPrefix(it.URL, "http://") && !strings.HasPrefix(it.URL, "https://") {
+			continue
+		}
 		seen[it.URL] = true
 		tg := Target{ID: randID(), URL: it.URL, Note: it.Note, Group: it.Group, Created: time.Now()}
 		t.list = append(t.list, tg)
@@ -233,6 +237,7 @@ func (jm *jobManager) Start(ctx context.Context, label string, tasks []jobTask, 
 	j.Total = len(j.Items)
 	jm.mu.Lock()
 	jm.jobs[id] = j
+	jm.evictLocked() // 只保留最近的任务,避免常驻进程内存无限增长
 	jm.mu.Unlock()
 	go func() {
 		var wg sync.WaitGroup
@@ -283,6 +288,22 @@ func (jm *jobManager) Start(ctx context.Context, label string, tasks []jobTask, 
 		jm.mu.Unlock()
 	}()
 	return id
+}
+
+// evictLocked 淘汰最旧任务,最多保留 maxJobs 个(调用方需持锁)。
+const maxJobs = 50
+
+func (jm *jobManager) evictLocked() {
+	for len(jm.jobs) > maxJobs {
+		oldestID := ""
+		var oldest time.Time
+		for id, j := range jm.jobs {
+			if oldestID == "" || j.Started.Before(oldest) {
+				oldestID, oldest = id, j.Started
+			}
+		}
+		delete(jm.jobs, oldestID)
+	}
 }
 
 func (jm *jobManager) Get(id string) *checkJob {
@@ -645,14 +666,14 @@ func cmdServe(ctx context.Context, args []string) int {
 	go loader.Reload(ctx)
 
 	mux := buildMux(serveDeps{
-		targets:   targets,
-		subs:      subs,
-		jobs:      newJobManager(),
-		token:     *token,
-		timeout:   timeoutFlag.Duration,
-		conc:      *conc,
-		nodes:     loader.Get,
-		reload:    func() { loader.Reload(ctx) },
+		targets: targets,
+		subs:    subs,
+		jobs:    newJobManager(),
+		token:   *token,
+		timeout: timeoutFlag.Duration,
+		conc:    *conc,
+		nodes:   loader.Get,
+		reload:  func() { loader.Reload(ctx) },
 	})
 
 	srv := &http.Server{Addr: *listen, Handler: mux}
@@ -714,8 +735,6 @@ func localIPs() ([]string, error) {
 	}
 	return out, nil
 }
-
-
 
 func defaultTargetsPath() string {
 	home, _ := os.UserHomeDir()

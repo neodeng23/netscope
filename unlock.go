@@ -407,9 +407,9 @@ func checkSpotify(ctx context.Context, t Tunnel, timeout time.Duration) UnlockRe
 		return UnlockResult{Service: "Spotify", Status: UnlockFailed, Note: shortErr(err.Error())}
 	}
 	var v struct {
-		Status         int    `json:"status"`
-		Country        string `json:"country"`
-		IsCountryLaunched *bool `json:"is_country_launched"`
+		Status            int    `json:"status"`
+		Country           string `json:"country"`
+		IsCountryLaunched *bool  `json:"is_country_launched"`
 	}
 	if err := json.Unmarshal([]byte(body), &v); err != nil || v.Status == 0 {
 		return UnlockResult{Service: "Spotify", Status: UnlockFailed, Note: "响应无法解析"}

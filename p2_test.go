@@ -318,13 +318,13 @@ func TestServeSubsAPI(t *testing.T) {
 	targets, _ := loadTargets(filepath.Join(dir, "targets.json"))
 	loader := newNodeLoader(subs)
 	srv := httptest.NewServer(buildMux(serveDeps{
-		targets:   targets,
-		subs:      subs,
-		jobs:      newJobManager(),
-		timeout:   2 * time.Second,
-		conc:      2,
-		nodes:     loader.Get,
-		reload:    func() { loader.Reload(context.Background()) },
+		targets: targets,
+		subs:    subs,
+		jobs:    newJobManager(),
+		timeout: 2 * time.Second,
+		conc:    2,
+		nodes:   loader.Get,
+		reload:  func() { loader.Reload(context.Background()) },
 	}))
 	defer srv.Close()
 

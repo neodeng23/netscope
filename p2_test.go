@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -464,5 +465,50 @@ func TestLocalCheckAPI(t *testing.T) {
 	}
 	if r.Domestic.Ping == nil || r.Foreign.Ping == nil {
 		t.Fatal("ping stats missing")
+	}
+}
+
+// ---------- IP 查询缓存 TTL 与 Fresh 语义 ----------
+
+type countingSource struct{ calls *int }
+
+func (c countingSource) Name() string { return "counting" }
+func (c countingSource) Lookup(_ context.Context, _ Tunnel, ip string) (*IPInfo, error) {
+	*c.calls++
+	return &IPInfo{Query: ip, Country: "测试国", Status: "success"}, nil
+}
+
+func TestLookupCacheTTLAndFresh(t *testing.T) {
+	old := ipQualitySources
+	var calls int
+	ipQualitySources = []IPQualitySource{countingSource{&calls}}
+	defer func() { ipQualitySources = old }()
+	lookupCache = sync.Map{} // 测试间隔离
+
+	ctx := context.Background()
+	// 批量语义:同 key 二次查询命中缓存
+	if _, err := LookupIP(ctx, Direct, "1.1.1.1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LookupIP(ctx, Direct, "1.1.1.1"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("缓存应吸收第二次查询: calls=%d", calls)
+	}
+	// Fresh 语义:绕过缓存强制查询
+	if _, err := LookupIPFresh(ctx, Direct, "1.1.1.1"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("Fresh 应绕过缓存: calls=%d", calls)
+	}
+	// TTL 过期:回填一个过期条目后,LookupIP 应重新查询
+	lookupCache.Store("direct|1.1.1.1", &lookupEntry{info: &IPInfo{Status: "success"}, at: time.Now().Add(-10 * time.Minute)})
+	if _, err := LookupIP(ctx, Direct, "1.1.1.1"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("过期条目应重查: calls=%d", calls)
 	}
 }

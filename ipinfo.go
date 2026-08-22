@@ -214,27 +214,57 @@ func (ipAPISource) Lookup(ctx context.Context, t Tunnel, ip string) (*IPInfo, er
 }
 
 // lookupCache 按 tunnel+ip 缓存查询结果。
+// 缓存只服务于"一次批量检测内不重复查询同一节点"（保护 ip-api 免费版 45 次/分的限制），
+// TTL 之外必须过期：用户切换代理节点后，同名通道的出口会变。
 var lookupCache sync.Map
 
-// LookupIP 经注册的数据源查询 IP 归属地与质量（带缓存）。
-// ip 为空时查询本机（该隧道的出口）IP。
-func LookupIP(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
-	key := t.Name() + "|" + ip
-	if v, ok := lookupCache.Load(key); ok {
-		if info, ok := v.(*IPInfo); ok {
-			return info, nil
-		}
-	}
+const lookupCacheTTL = 5 * time.Minute
+
+type lookupEntry struct {
+	info *IPInfo
+	at   time.Time
+}
+
+// doLookupIP 逐个尝试注册的数据源。
+func doLookupIP(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
 	var lastErr error
 	for _, src := range ipQualitySources {
 		info, err := src.Lookup(ctx, t, ip)
 		if err == nil {
-			lookupCache.Store(key, info)
 			return info, nil
 		}
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// LookupIP 经注册的数据源查询 IP 归属地与质量（带 TTL 缓存，批量检测用）。
+// ip 为空时查询本机（该隧道的出口）IP。
+func LookupIP(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
+	key := t.Name() + "|" + ip
+	if v, ok := lookupCache.Load(key); ok {
+		if e, ok := v.(*lookupEntry); ok && time.Since(e.at) < lookupCacheTTL {
+			return e.info, nil
+		}
+		lookupCache.Delete(key)
+	}
+	info, err := doLookupIP(ctx, t, ip)
+	if err != nil {
+		return nil, err
+	}
+	lookupCache.Store(key, &lookupEntry{info: info, at: time.Now()})
+	return info, nil
+}
+
+// LookupIPFresh 绕过缓存的实时查询（每次手动触发的单次诊断用：本机体检、ip show），
+// 结果同时回填缓存。
+func LookupIPFresh(ctx context.Context, t Tunnel, ip string) (*IPInfo, error) {
+	info, err := doLookupIP(ctx, t, ip)
+	if err != nil {
+		return nil, err
+	}
+	lookupCache.Store(t.Name()+"|"+ip, &lookupEntry{info: info, at: time.Now()})
+	return info, nil
 }
 
 // ipipResult 是国内视角（myip.ipip.net 文本接口）。

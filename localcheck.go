@@ -88,7 +88,7 @@ func RunLocalCheck(ctx context.Context) LocalCheckResult {
 
 	run(func() { // 国外视角：ip-api 出口 + 基准 ping + 站点
 		f := res.Foreign
-		if info, err := LookupIP(ctx, Direct, ""); err == nil {
+		if info, err := LookupIPFresh(ctx, Direct, ""); err == nil {
 			f.IP = info.Query
 			f.Location = info.Location()
 			f.ISP = info.ISP

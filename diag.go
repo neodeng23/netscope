@@ -757,7 +757,7 @@ func IPShow(ctx context.Context, t Tunnel) IPShowResult {
 	}()
 	go func() {
 		defer func() { wg <- struct{}{} }()
-		if v, err := LookupIP(ctx, t, ""); err == nil {
+		if v, err := LookupIPFresh(ctx, t, ""); err == nil {
 			r.Global = v
 		} else {
 			r.GlobalErr = cleanErr(err)

@@ -290,6 +290,9 @@ func buildMux(d serveDeps) *http.ServeMux {
 	if d.nodes == nil {
 		d.nodes = func() []Tunnel { return nil }
 	}
+	if d.reload == nil {
+		d.reload = func() {}
+	}
 	mux := http.NewServeMux()
 
 	auth := func(next http.Handler) http.Handler {
@@ -385,6 +388,16 @@ func buildMux(d serveDeps) *http.ServeMux {
 	}))
 	mux.Handle("/api/subs", subsHandler)
 	mux.Handle("/api/subs/", subsHandler)
+
+	// /api/subs/reload：重新拉取全部订阅（机场更新了节点配置后手动刷新用）
+	mux.Handle("/api/subs/reload", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		go d.reload()
+		writeJSON(w, map[string]bool{"ok": true})
+	})))
 
 	targetsHandler := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		suffix := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/targets"), "/")

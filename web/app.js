@@ -342,6 +342,23 @@ function fmtSize(n) {
 
 // ---------- 启动 ----------
 
+// 重新拉取全部订阅
+async function reloadSubs() {
+  const btn = $('#btn-sub-reload');
+  btn.disabled = true;
+  try {
+    await api('/api/subs/reload', { method: 'POST' });
+    $('#subs-progress').textContent = '重新拉取中…';
+    await refresh();
+    watchSubsLoading();
+  } catch (e) {
+    alert('重新拉取失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('#btn-sub-reload').addEventListener('click', reloadSubs);
 $('#btn-sub-add').addEventListener('click', addSub);
 $('#new-sub').addEventListener('keydown', (e) => { if (e.key === 'Enter') addSub(); });
 $('#subs tbody').addEventListener('click', (e) => {
